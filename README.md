@@ -12,7 +12,6 @@ Therefore, I would like to skip optional features as much as posible such as no 
 - [x] Implement region loss
 - [x] load pre-trained darknet19 weights
 - [ ] load passcal voc dataset (generate input, label)
-- [ ] Define the region loss
 - [ ] Implement train on VOC dataset
 - [ ] Save and load trained model
 - [ ] Implement inference
