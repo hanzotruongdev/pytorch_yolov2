@@ -1,8 +1,8 @@
 <h1 align="center"> PYTORCH_YOLOV2 </h1> 
 
 Implement a minimal YOLOv2 in Pytorch for learning purpose. 
-The project forcus on implement the logic code behinds the YOLOv2 algorithms. 
-Therefore, I will skip optional features as much as posible such as no loading config, uses only Darknet19 as a backbone network.
+The project focus on implementations of the logic code behind the YOLOv2 algorithms. 
+Therefore, I would like to skip optional features as much as posible such as no loading config, uses only Darknet19 as a backbone network.
 
 ## Features
 
@@ -12,7 +12,6 @@ Therefore, I will skip optional features as much as posible such as no loading c
 - [x] Implement region loss
 - [x] load pre-trained darknet19 weights
 - [ ] load passcal voc dataset (generate input, label)
-- [ ] Define the region loss
 - [ ] Implement train on VOC dataset
 - [ ] Save and load trained model
 - [ ] Implement inference
