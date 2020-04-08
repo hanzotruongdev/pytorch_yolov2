@@ -6,12 +6,13 @@ Therefore, I would like to skip optional features as much as posible such as no 
 
 ## Features
 
-- [x] Implement forward pass darknet 19
-- [x] Implement YOLO header layers
+- [x] Implement Darknet19
+- [x] Implement YOLO CNN using Darknet
 - [x] Implement Reog layer
 - [x] Implement region loss
 - [x] load pre-trained darknet19 weights
-- [ ] load passcal voc dataset (generate input, label)
-- [ ] Implement train on VOC dataset
+- [x] load passcal voc 2012 dataset (generate input, label)
+- [ ] Implement train YOLO
 - [ ] Save and load trained model
 - [ ] Implement inference
+- [ ] Show loss graph using TensorBoard
