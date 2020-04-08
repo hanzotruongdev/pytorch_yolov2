@@ -11,7 +11,7 @@ import cv2
 import numpy as np
 
 class VOCDataset(Dataset):
-    def __init__(self, root_path="data/VOCdevkit", year="2012", mode="train", image_size=448):
+    def __init__(self, root_path="data/VOCdevkit", year="2012", mode="train", image_size=416):
         if mode in ["train", "test", "val"] and year in ["2012"]:
             self.data_path = os.path.join(root_path, "VOC{}".format(year))
         

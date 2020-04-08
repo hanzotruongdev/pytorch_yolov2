@@ -81,16 +81,16 @@ class BoundBox:
 
 class BestAnchorFinder(object):
     
-    def __init__(self, anchors):
-        """
+    def __init__(self, ANCHORS):
+        '''
         ANCHORS: a np.array of even number length e.g.
-            
-            _ANCHORS = [[4,2], ##  width=4, height=2,  flat large anchor box
-                        [2,4], ##  width=2, height=4,  tall large anchor box
-                        [1,1]] ##  width=1, height=1,  small anchor box
-        """
-        self.anchors = [BoundBox(ANCHORS[i][0]/2,  ANCHORS[i][1]/2, ANCHORS[i][0], ANCHORS[i][1]) 
-                        for i in range(int(len(ANCHORS))]
+        
+        _ANCHORS = [4,2, ##  width=4, height=2,  flat large anchor box
+                    2,4, ##  width=2, height=4,  tall large anchor box
+                    1,1] ##  width=1, height=1,  small anchor box
+        '''
+        self.anchors = [BoundBox(0, 0, ANCHORS[2*i], ANCHORS[2*i+1]) 
+                        for i in range(int(len(ANCHORS)//2))]
 
     def _interval_overlap(self,interval_a, interval_b):
         x1, x2 = interval_a
