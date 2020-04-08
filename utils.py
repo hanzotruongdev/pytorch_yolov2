@@ -23,29 +23,117 @@ def resize_image(image, label, image_size):
 
     return image, new_label
     
-def box_ious(box, boxes):
+def bbox_ious(boxes1, boxes2):
     """
-    returns the IoU of box vs a number of other boxes
+    calculate iou scores
+        - boxes1 [..., 4], (x, y, w, h)
+        - boxes2 [..., 4], (x, y, w, h)
     """
-    b1_x1, b1_y1, b1_x2, b1_y2 = box[:, 0], box[:, 1], box[:, 2], box[:, 3]
-    b2_x1, b2_y1, b2_x2, b2_y2 = boxes[:, 0], boxes[:, 1], boxes[:, 2], boxes[:, 3]
+    # extract xy, wh of box1 and box2
+    box1_xy = boxes1[..., :2]
+    box1_wh = boxes1[..., 2:4]
+    box2_xy = boxes2[..., :2]
+    box2_wh = boxes2[..., 2:4]
 
-    # calculate the corner position of the intersetion
-    inter_rec_x1 = torch.max(b1_x1, b2_x1)
-    inter_rec_y1 = torch.max(b1_y1, b2_y1)
-    inter_rec_x2 = torch.min(b1_y1, b2_y1)
-    inter_rec_y2 = torch.min(b1_y2, b2_y2)
+    # calculate min xy max xy of box1 and box2
+    box1_wh_half = box1_wh / 2.0
+    box1_mins = box1_xy - box1_wh_half
+    box1_maxs = box1_xy + box1_wh_half
+    box2_wh_half = box2_wh / 2.0
+    box2_mins = box2_xy - box2_wh_half
+    box2_maxs = box2_xy + box2_wh_half
 
-    # calculate the area
-    inter_area = torch.clamp(inter_rec_x2 - inter_rec_x1 + 1, 0) * torch.clamp(inter_rec_y2 - inter_rec_y1 + 1, min=0)
+    # calculate min xy of intersects, areas of intersect
+    intersect_mins = torch.max(box1_mins, box2_mins)
+    intersect_maxs = torch.min(box1_maxs, box2_maxs)
+    intersect_wh = intersect_maxs - intersect_mins
+    intersect_areas = intersect_wh[..., 0] * intersect_wh[..., 1]
 
-    box_area = (b1_x2 - b1_x1 +1) * (b1_y2 - b1_y1 + 1)
-    boxes_area = (b2_x2 - b2_x1 + 1) * (b2_y2 - b2_y1 + 1)
+    # calculate areas of 2 boxes
+    box1_areas = box1_wh[..., 0] * box1_wh[..., 1]
+    box2_areas = box2_wh[..., 0] * box2_wh[..., 1]
 
-    ious = inter_area / (box_area + boxes_area - inter_area)
+    # calculate iou_scores
+    union_areas = box1_areas + box2_areas - intersect_areas
+    iou_scores = intersect_areas / union_areas
 
-    return ious
+    return iou_scores
 
+class BoundBox:
+    def __init__(self, x, y, w, h, confidence=None,classes=None):
+        self.xmin, self.ymin = x-w/2, y-h/2
+        self.xmax, self.ymax = x+w/2, y+h/2
+        ## the code below are used during inference
+        # probability
+        self.confidence      = confidence
+        # class probaiblities [c1, c2, .. cNclass]
+        self.set_class(classes)
+        
+    def set_class(self,classes):
+        self.classes = classes
+        self.label   = np.argmax(self.classes) 
+        
+    def get_label(self):  
+        return(self.label)
+    
+    def get_score(self):
+        return(self.classes[self.label])
+
+class BestAnchorFinder(object):
+    
+    def __init__(self, anchors):
+        """
+        ANCHORS: a np.array of even number length e.g.
+            
+            _ANCHORS = [[4,2], ##  width=4, height=2,  flat large anchor box
+                        [2,4], ##  width=2, height=4,  tall large anchor box
+                        [1,1]] ##  width=1, height=1,  small anchor box
+        """
+        self.anchors = [BoundBox(ANCHORS[i][0]/2,  ANCHORS[i][1]/2, ANCHORS[i][0], ANCHORS[i][1]) 
+                        for i in range(int(len(ANCHORS))]
+
+    def _interval_overlap(self,interval_a, interval_b):
+        x1, x2 = interval_a
+        x3, x4 = interval_b
+        if x3 < x1:
+            if x4 < x1:
+                return 0
+            else:
+                return min(x2,x4) - x1
+        else:
+            if x2 < x3:
+                 return 0
+            else:
+                return min(x2,x4) - x3  
+
+    def bbox_iou(self,box1, box2):
+        intersect_w = self._interval_overlap([box1.xmin, box1.xmax], [box2.xmin, box2.xmax])
+        intersect_h = self._interval_overlap([box1.ymin, box1.ymax], [box2.ymin, box2.ymax])  
+
+        intersect = intersect_w * intersect_h
+
+        w1, h1 = box1.xmax-box1.xmin, box1.ymax-box1.ymin
+        w2, h2 = box2.xmax-box2.xmin, box2.ymax-box2.ymin
+
+        union = w1*h1 + w2*h2 - intersect
+
+        return float(intersect) / union
+    
+    def find(self, center_w, center_h):
+        # find the anchor that best predicts this box
+        best_anchor = -1
+        max_iou     = -1
+        # each Anchor box is specialized to have a certain shape.
+        # e.g., flat large rectangle, or small square
+        shifted_box = BoundBox(0, 0,center_w, center_h)
+        ##  For given object, find the best anchor box!
+        for i in range(len(self.anchors)): ## run through each anchor box
+            anchor = self.anchors[i]
+            iou    = self.bbox_iou(shifted_box, anchor)
+            if max_iou < iou:
+                best_anchor = i
+                max_iou     = iou
+        return(best_anchor,max_iou)    
 
 def get_detection_result(feats, threshold, iou_thres, n_classes):
     '''

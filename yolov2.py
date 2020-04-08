@@ -9,6 +9,7 @@ import torch.nn.functional as F
 import numpy as np
 import args
 from darknet import Darknet19, conv_bn_leaky
+from utils import bbox_ious, BestAnchorFinder
 
 # VOC 2012 dataset
 LABELS = ['person', 'bicycle', 'car', 'motorcycle', 'airplane', 'bus', 'train', 'truck', 'boat', 'traffic light', 'fire hydrant', 'stop sign', 'parking meter', 'bench', 'bird', 'cat', 'dog', 'horse', 'sheep', 'cow', 'elephant', 'bear', 'zebra', 'giraffe', 'backpack', 'umbrella', 'handbag', 'tie', 'suitcase', 'frisbee', 'skis', 'snowboard', 'sports ball', 'kite', 'baseball bat', 'baseball glove', 'skateboard', 'surfboard', 'tennis racket', 'bottle', 'wine glass', 'cup', 'fork', 'knife', 'spoon', 'bowl', 'banana', 'apple', 'sandwich', 'orange', 'broccoli', 'carrot', 'hot dog', 'pizza', 'donut', 'cake', 'chair', 'couch', 'potted plant', 'bed', 'dining table', 'toilet', 'tv', 'laptop', 'mouse', 'remote', 'keyboard', 'cell phone', 'microwave', 'oven', 'toaster', 'sink', 'refrigerator', 'book', 'clock', 'vase', 'scissors', 'teddy bear', 'hair drier', 'toothbrush']
@@ -53,6 +54,7 @@ class YOLOv2(nn.Module):
         super(YOLOv2, self).__init__()
         self.num_classes = CLASS
         self.num_anchors = len(ANCHORS)
+        self.best_anchor_finder = BestAnchorFinder(ANCHORS)
         darknet19 = Darknet19()
 
         # define elements used
@@ -89,13 +91,13 @@ class YOLOv2(nn.Module):
 
         return out
 
-    def loss(self, y_pred, y_true, true_boxes):
+    def loss(self, y_pred, true_boxes):
         """
         return YOLOv2 loss
         input:
             - Y_pred: YOLOv2 predicted feature map, the output feature map of forward() function
               shape of [N, B*(5+C), Grid, Grid], t_x, t_y, t_w, t_h, t_c, and (class1_score, class2_score, ...)
-            - y_true: ground truth in shape of [N, S*S*B, 5 + n_class]
+            - true_boxes: all ground truth boxes, maximum 50 objects
         output:
             YOLOv2 loss includes coordinate loss, confidence score loss, and class loss.
         """
@@ -106,9 +108,10 @@ class YOLOv2(nn.Module):
         grid_xy = torch.cat([c_x.view(-1, 1), c_y.view(-1, 1)], -1)  # [S*S, 2]
         grid_xy = grid_xy.repead(BOX, 1)                             # [S*S*B, 2]
 
-        coord_mask = y_true.new_zero([BATCH_SIZE, GRID_H * GRID_W * B, 1])
-        conf_mask  = y_true.new_zero([BATCH_SIZE, GRID_H * GRID_W * B, 1])
-        class_mask = y_true.new_zero([BATCH_SIZE, GRID_H * GRID_W * B, 1])
+        y_true      = self.build_target(true_boxes) #  shape of [N, S*S*B, 5 + n_class]
+        coord_mask  = y_true.new_zero([BATCH_SIZE, GRID_H * GRID_W * B, 1])
+        conf_mask   = y_true.new_zero([BATCH_SIZE, GRID_H * GRID_W * B, 1])
+        class_mask  = y_true.new_zero([BATCH_SIZE, GRID_H * GRID_W * B, 1])
 
         '''
         Adjust prediction
@@ -120,6 +123,7 @@ class YOLOv2(nn.Module):
         # adjust xy, wh
         pred_box_xy = F.sigmoid(y_pred[..., 0:2]) + grid_xy         # [N, S*S*B, 2] + [S*S*B, 2] 
         pred_box_wh = torch.exp(y_pred[..., 2:4]) * np.reshape(ANCHORS, [1, B, 2])
+        pred_box_xywh = torch.cat([pred_box_xy, pred_box_wh], -1)
 
         # adjust confidence score
         pred_box_conf = F.sigmoid(y_pred[..., 4])
@@ -135,24 +139,7 @@ class YOLOv2(nn.Module):
         true_box_wh = y_true[..., 2:4]
 
         # adjust true confidence score
-        true_wh_half = true_box_wh / 2.
-        true_mins = true_box_xy - true_wh_half
-        true_maxs = true_box_xy + true_wh_half
-
-        pred_wh_haft = pred_box_wh / 2.
-        pred_mins = pred_box_xy - pred_wh_haft
-        pred_maxs = pred_box_xy + pred_wh_haft
-
-        intersect_mins = torch.max(true_mins, pred_mins)
-        intersect_maxs = torch.min(true_maxs, pred_maxs)
-        intersect_wh = intersect_maxs - intersect_mins
-        intersect_areas = intersect_wh[..., 0] * intersect_wh[..., 1]
-
-        true_areas = true_box_wh[..., 0] * true_box_wh[..., 1]
-        pred_areas = pred_box_wh[..., 0] * pred_box_wh[..., 1]
-
-        union_areas = true_areas + pred_areas - intersect_areas
-        iou_scores = intersect_areas / union_areas
+        iou_scores = bbox_ious(pred_box_xywh, y_true[:4])
 
         true_box_conf = iou_scores * y_true[..., 4]
         
@@ -167,32 +154,9 @@ class YOLOv2(nn.Module):
 
         ### confidence mask: penalize predictors and boxes with low IoU
         # first, penalize boxes, which has IoU with any ground truth box < 0.6
-        true_xy = true_boxes[..., 0:2]
-        true_wh = true_boxes[..., 2:4]
+        iou_scores = bbox_ious(pred_box_xywh.unsqueeze(2), true_boxes[..., :4]) #[N, S*S*B, , 1]       
 
-        true_wh_half = true_wh / 2.
-        true_mins = true_xy - true_wh_half
-        true_maxs = true_xy + true_wh_half
-
-        pred_xy = pred_box_xy.unsqueeze(2)
-        pred_wh = pred_box_wh.unsqueeze(2)
-
-        pred_wh_half = pred_wh / 2.
-        pred_mins = pred_xy - pred_wh_haft
-        pred_mmaxs = pred_xy + pred_wh_haft
-
-        intersect_mins = torch.max(pred_mins, true_mins)
-        intersect_maxs = torch.min(pred_maxs, true_maxs)
-        intersect_wh = intersect_maxs - intersect_mins
-        intersect_areas = intersect_wh[..., 0] * intersect_wh[..., 1]
-
-        true_areas = true_wh[..., 0] * true_wh[..., 1]
-        pred_areas = pred_wh[..., 0] * pred_wh[..., 1]
-
-        union_areas =  true_areas + pred_areas - intersect_areas
-        iou_scores  = intersect_areas / union_areas                 #[N, S*S*B, , 1]
-
-        best_iou = torch.max(ious_scores, dim=2, keepdim=False)     #[N, S*S*B, 1]
+        best_iou = torch.max(iou_scores, dim=2, keepdim=False)     #[N, S*S*B, 1]
         conf_mask = conf_mask + (best_ious < 0.6).float() * (1 - y_true[..., 4]) * LAMBDA_NO_OBJECT
 
         # second, penalized predictors
@@ -233,6 +197,35 @@ class YOLOv2(nn.Module):
         print("total loss: ", loss)
 
         return loss
+
+    def build_target(self, ground_truth):
+        """
+        Build target output y_true with shape of [N, S*S*B, 5+1]
+        """
+        y_true = np.zeros([BATCH_SIZE, GRID_W, GRID_H, B,  4 + 1 + 1])
+
+        for iframe in range(BATCH_SIZE):
+            for obj in ground_truth[iframe]:
+                if obj[2] == 0 and obj[3] == 0: 
+                    # both w and h are zero
+                    break
+                center_x, center_y, w, h, class_index = obj
+
+                grid_x = int(np.floor(center_x))
+                grid_y = int(np.floor(center_y))
+
+                assert grid_x < GRID_W and grid_y < GRID_H and class_index < CLASS
+
+                box = [center_x, center_y, w, h]
+                best_anchor, best_iou = self.best_anchor_finder.find(w, h)
+
+                y_true[iframe, grid_x, grid_y, best_anchor, :4] = box
+                y_true[iframe, grid_x, grid_y, best_anchor, 4] = 1.
+                y_true[iframe, grid_x, grid_y, best_anchor, 5] = class_index
+
+        y_true = y_true.reshape([BATCH_SIZE, -1, 6])
+
+        return torch.from_numpy(y_true)
 
     def load_weight(self, weight_file):
         pass

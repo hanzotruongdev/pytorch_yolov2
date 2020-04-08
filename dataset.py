@@ -40,8 +40,12 @@ class VOCDataset(Dataset):
         objects = []
         for obj in anno.findall('object'):
             xmin, xmax, ymin, ymax = [int(obj.find('bndbox').find(tag).text) - 1 for tag in ["xmin", "xmax", "ymin", "ymax"]]
+            box_w = xmax - xmin
+            box_h = ymax - ymin
+            center_x = xmin + box_w / 2
+            center_y = ymin + box_h / 2
             label = self.classes.index(obj.find('name').text.lower().strip())
-            objects.append([xmin, ymin, xmax, ymax, label])
+            objects.append([center_x, center_y, box_w, box_h, label])
 
         # resize image
         image, objects = resize_image(image, objects, self.image_size)
