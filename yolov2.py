@@ -85,22 +85,150 @@ class YOLOv2(nn.Module):
 
         return out
 
-    def loss(self, y_pred, y_true):
+    def loss(self, y_pred, y_true, true_boxes):
         """
         return YOLOv2 loss
         input:
-            - pred: YOLOv2 prediction, the output feature map of forward() function
-                    shape of [N, S*S*B, 5 + n_class]
-            - label: ground truth in shape of [N, S*S*B, 5 + n_class]
+            - Y_pred: YOLOv2 predicted feature map, the output feature map of forward() function
+              shape of [N, B*(5+C), Grid, Grid], t_x, t_y, t_w, t_h, t_c, and (class1_score, class2_score, ...)
+            - y_true: ground truth in shape of [N, S*S*B, 5 + n_class]
         output:
             YOLOv2 loss includes coordinate loss, confidence score loss, and class loss.
         """
 
+        shift_x, shift_y = torch.meshgrid(torch.arange(0, GRID_W), torch.arange(0, GRID_H))
+        c_x = shift_x.t().contiguous.float()
+        c_y = shift_y.t().contiguous.float()
+        grid_xy = torch.cat([c_x.view(-1, 1), c_y.view(-1, 1)], -1)  # [S*S, 2]
+        grid_xy = grid_xy.repead(BOX, 1)                             # [S*S*B, 2]
+
+        coord_mask = y_true.new_zero([BATCH_SIZE, GRID_H * GRID_W * B, 1])
+        conf_mask  = y_true.new_zero([BATCH_SIZE, GRID_H * GRID_W * B, 1])
+        class_mask = y_true.new_zero([BATCH_SIZE, GRID_H * GRID_W * B, 1])
+
+        '''
+        Adjust prediction
+        '''
+
+        # adjust output to the shape of [N, S*S*B, 5 + n_class]
+        y_pred = y_pred.permute(0, 2, 3, 1).contiguous().view(BATCH_SIZE, GRID_H * GRID_W * BOX, 5 + CLASS)
+
+        # adjust xy, wh
+        pred_box_xy = F.sigmoid(y_pred[..., 0:2]) + grid_xy         # [N, S*S*B, 2] + [S*S*B, 2] 
+        pred_box_wh = torch.exp(y_pred[..., 2:4]) * np.reshape(ANCHORS, [1, B, 2])
+
+        # adjust confidence score
+        pred_box_conf = F.sigmoid(y_pred[..., 4])
+
+        # adjust class propabilities
+        pred_box_class = y_pred[...,5:]
+
+        '''
+        Adjust ground truth
+        '''
+        # adjust true xy and wh
+        true_box_xy = y_true[..., 0:2]
+        true_box_wh = y_true[..., 2:4]
+
+        # adjust true confidence score
+        true_wh_half = true_box_wh / 2.
+        true_mins = true_box_xy - true_wh_half
+        true_maxs = true_box_xy + true_wh_half
+
+        pred_wh_haft = pred_box_wh / 2.
+        pred_mins = pred_box_xy - pred_wh_haft
+        pred_maxs = pred_box_xy + pred_wh_haft
+
+        intersect_mins = torch.max(true_mins, pred_mins)
+        intersect_maxs = torch.min(true_maxs, pred_maxs)
+        intersect_wh = intersect_maxs - intersect_mins
+        intersect_areas = intersect_wh[..., 0] * intersect_wh[..., 1]
+
+        true_areas = true_box_wh[..., 0] * true_box_wh[..., 1]
+        pred_areas = pred_box_wh[..., 0] * pred_box_wh[..., 1]
+
+        union_areas = true_areas + pred_areas - intersect_areas
+        iou_scores = intersect_areas / union_areas
+
+        true_box_conf = iou_scores * y_true[..., 4]
+        
+        # adjust class probabilities
+        true_box_class = torch.argmax(y_true[...,5:], -1)
+        
+        '''
+        Determine the mask
+        '''
+        ### coordinate mask, simply is all predictors
+        coord_mask = y_true[..., 4] * LAMBDA_COORD          # [N, S*S*B, 1]
+
+        ### confidence mask: penalize predictors and boxes with low IoU
+        # first, penalize boxes, which has IoU with any ground truth box < 0.6
+        true_xy = true_boxes[..., 0:2]
+        true_wh = true_boxes[..., 2:4]
+
+        true_wh_half = true_wh / 2.
+        true_mins = true_xy - true_wh_half
+        true_maxs = true_xy + true_wh_half
+
+        pred_xy = pred_box_xy.unsqueeze(2)
+        pred_wh = pred_box_wh.unsqueeze(2)
+
+        pred_wh_half = pred_wh / 2.
+        pred_mins = pred_xy - pred_wh_haft
+        pred_mmaxs = pred_xy + pred_wh_haft
+
+        intersect_mins = torch.max(pred_mins, true_mins)
+        intersect_maxs = torch.min(pred_maxs, true_maxs)
+        intersect_wh = intersect_maxs - intersect_mins
+        intersect_areas = intersect_wh[..., 0] * intersect_wh[..., 1]
+
+        true_areas = true_wh[..., 0] * true_wh[..., 1]
+        pred_areas = pred_wh[..., 0] * pred_wh[..., 1]
+
+        union_areas =  true_areas + pred_areas - intersect_areas
+        iou_scores  = intersect_areas / union_areas                 #[N, S*S*B, , 1]
+
+        best_iou = torch.max(ious_scores, dim=2, keepdim=False)     #[N, S*S*B, 1]
+        conf_mask = conf_mask + (best_ious < 0.6).float() * (1 - y_true[..., 4]) * LAMBDA_NO_OBJECT
+
+        # second, penalized predictors
+        conf_mask = conf_mask + y_true[..., 4] * LAMBDA_OBJECT
+
+        ### class mask: simply the positions containing true boxes
+        class_mask = y_true[..., 4] * LAMBDA_CLASS
+
+        '''
+        Finalize the loss
+        '''
+        nb_coord_box = (coord_mask > 0.0).float().sum()
+        nb_conf_box = (conf_mask > 0.0).float().sum()
+        nb_class_box = (class_mask > 0.0).float().sum()
+
         # loss_xywh
+        loss_xy = F.mse_loss(pred_box_xy * coord_mask, true_box_xy * coord_mask, reduction='sum') / (nb_conf_box + 1e-6)
+        loss_wh = F.mse_loss(pred_box_wh * coord_mask, true_box_wh * coord_mask, reduction='sum')/ (nb_coord_box + 1e-6)
+
         # loss_class
-        # loss_class = F.nll_loss(pred_class_prob, true_class_id)
-        # If i calculate this way, it will include the noobj to loss ... 
+        class_mask = class_mask.view(-1, 1)
+        t_pred_box_class = pred_box_class.view(-1, CLASS).masked_select(class_mask).view(-1, CLASS)
+        t_true_box_idx = true_box_class.view(-1, 1).masked_select(class_mask).view(-1, 1)
+        loss_class = F.nll_loss(t_pred_box_class, t_true_box_idx, reduction='sum') / (nb_class_box + 1e-6)
+
         # loss_confidence
+        loss_conf = F.mse_loss(pred_box_conf * conf_mask, true_box_conf * conf_mask, reduction='sum') / (nb_conf_box + 1e-6)
+
+        loss = loss_xy + loss_wh + loss_class + loss_conf
+
+        '''
+        Debug
+        '''
+        print("Loss xy: ", loss_xy)
+        print("Loss wh: ", loss_wh)
+        print("loss class: ", loss_class)
+        print("loss conf: ", loss_conf)
+        print("total loss: ", loss)
+
+        return loss
 
     def load_weight(self, weight_file):
         pass
@@ -109,9 +237,10 @@ if __name__ == "__main__":
     args_ = args.arg_parse()
     net = YOLOv2(args_)
     # net.load_weight("./darknet19_448.conv.23")
+    print(net.parameters)
 
 
     input = torch.randn(4, 3, IMAGE_H, IMAGE_W)
     output = net.forward(input)
-    print("Input shape: ", input.shape)
+    # print("Input shape: ", input.shape)
     print("Output shape: ", output.shape)
