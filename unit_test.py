@@ -1,3 +1,8 @@
+#---------------------------------------------
+# Pytorch YOLOv2 - A simplified yolov2 version
+# @Author: Noi Truong <noitq.hust@gmail.com>
+#---------------------------------------------
+
 import torch
 from model import YOLOv2
 import utils

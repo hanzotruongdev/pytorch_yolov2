@@ -1,5 +1,27 @@
 import numpy as np
 import torch
+import cv2
+
+
+def resize_image(image, label, image_size):
+    """
+    resize object detection image
+    """
+    height, width = image.shape[:2]
+    image = cv2.resize(image, (image_size, image_size))
+    width_ratio = float(image_size) / width
+    height_ratio = float(image_size) / height
+    new_label = []
+    for lb in label:
+        resized_xmin = lb[0] * width_ratio
+        resized_ymin = lb[1] * height_ratio
+        resized_xmax = lb[2] * width_ratio
+        resized_ymax = lb[3] * height_ratio
+        resize_width = resized_xmax - resized_xmin
+        resize_height = resized_ymax - resized_ymin
+        new_label.append([resized_xmin, resized_ymin, resize_width, resize_height, lb[4]])
+
+    return image, new_label
     
 def box_ious(box, boxes):
     """

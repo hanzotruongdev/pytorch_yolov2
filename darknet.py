@@ -1,8 +1,7 @@
-
-#--------------------------------------------------
-# Darknet19
-# Written by Noi Truong email: noitq.hust@gmail.com
-#--------------------------------------------------
+#---------------------------------------------
+# Pytorch YOLOv2 - A simplified yolov2 version
+# @Author: Noi Truong <noitq.hust@gmail.com>
+#---------------------------------------------
 
 import torch
 import torch.nn as nn
