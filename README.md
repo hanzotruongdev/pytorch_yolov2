@@ -12,7 +12,8 @@ Therefore, I would like to skip optional features as much as posible such as no 
 - [x] Implement region loss
 - [x] load pre-trained darknet19 weights
 - [x] load passcal voc 2012 dataset (generate input, label)
-- [ ] Implement train YOLO
+- [x] Implement train YOLO
 - [ ] Save and load trained model
 - [ ] Implement inference
-- [ ] Show loss graph using TensorBoard
+- [x] Show loss graph using TensorBoard
+- [x] Implement jupyter notebook for training on Google Colab
