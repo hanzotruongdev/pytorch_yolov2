@@ -3,3 +3,5 @@ __pycache__
 
 # pretrained darknet 19 weights
 darknet19_448.conv.23
+runs
+result
