@@ -127,6 +127,7 @@ class YOLOv2(nn.Module):
 
         if torch.cuda.is_available():
             y_true = y_true.cuda()
+            y_pred = y_pred.cuda()
 
         # prepare grid, and empty mask
         shift_x, shift_y = torch.meshgrid(torch.arange(0, self.GRID_W), torch.arange(0, self.GRID_H))
