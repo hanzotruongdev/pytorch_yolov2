@@ -3,22 +3,7 @@ import torch
 import cv2
 from torchvision.ops import nms
 
-# VOC 2012 dataset
-LABELS = ['aeroplane', 'bicycle', 'bird', 'boat', 'bottle', 'bus', 'car', 'cat', 'chair', 'cow',
-                        'diningtable', 'dog', 'horse', 'motorbike', 'person', 'pottedplant', 'sheep', 'sofa', 'train',
-                        'tvmonitor']
-
-CLASS = len(LABELS)
-
-IMAGE_W, IMAGE_H    = 416, 416
-GRID_W, GRID_H      = 13, 13
-
-
-ANCHORS             = [1.3221, 1.73145, 3.19275, 4.00944, 5.05587, 8.09892, 9.47112, 4.84053, 11.2364, 10.0071]
-BOX                 = int(len(ANCHORS) / 2)
-
-
-def draw_boxes(image, boxes, label=LABELS, color=255):
+def draw_boxes(image, boxes, label, color=255):
     """
     draw boxes on image
     - image: np array or cv2 image
@@ -36,10 +21,8 @@ def draw_boxes(image, boxes, label=LABELS, color=255):
         xmin, xmax = int(x - w/2), int(x + w/2)
         ymin, ymax = int(y - h/2), int(y + h/2)
 
-        print("object: ", obj)
-
         cv2.rectangle(image, (xmin, ymin), (xmax, ymax), color, 2)
-        cv2.putText(image, LABELS[int(cls_idx)], (xmin, ymin), cv2.FONT_HERSHEY_PLAIN, 2, color)
+        cv2.putText(image, label[int(cls_idx)], (xmin, ymin), cv2.FONT_HERSHEY_PLAIN, 2, color)
 
 
     return image
@@ -181,7 +164,7 @@ class BestAnchorFinder(object):
         return(best_anchor,max_iou)    
 
 
-def get_detection_result(y_pred, conf_thres=0.6, nms_thres=0.4, classes=len(LABELS)):
+def get_detection_result(y_pred, anchors, classes, conf_thres=0.6, nms_thres=0.4):
     """
     input:
         - y_pred: [N, B*(5+CLASS), S, S]
@@ -192,13 +175,13 @@ def get_detection_result(y_pred, conf_thres=0.6, nms_thres=0.4, classes=len(LABE
         - out: [N, 50, 5+1]
     """
 
-    print("*"*50)
-    print("Get detection result: ", y_pred.shape)
-    print("*"*50)
+    # config
+    BATCH_SIZE, _, GRID_W, GRID_H = y_pred.shape
+    ANCHORS = anchors
+    BOX = len(anchors) // 2
+    CLASS = classes
     
-
-    batch_size = y_pred.shape[0]
-    output = y_pred.new_zeros([batch_size, 50, 5+1])
+    output = y_pred.new_zeros([BATCH_SIZE, 50, 5+1])
 
     # prepare grid, and empty mask
     shift_x, shift_y = torch.meshgrid(torch.arange(0, GRID_W), torch.arange(0, GRID_H))
@@ -211,14 +194,10 @@ def get_detection_result(y_pred, conf_thres=0.6, nms_thres=0.4, classes=len(LABE
     Adjust prediction
     '''
     # transform from shape of [N, B*(5+CLASS), S, S] to [N, S*S*B, 5 + CLASS]
-    y_pred = y_pred.permute(0, 2, 3, 1).contiguous().view(batch_size, GRID_H * GRID_W * BOX, 5 + CLASS)
+    y_pred = y_pred.permute(0, 2, 3, 1).contiguous().view(BATCH_SIZE, GRID_H * GRID_W * BOX, 5 + CLASS)
 
     # adjust xy, wh
     pred_box_xy = y_pred[..., 0:2].sigmoid() + grid_xy         # [N, S*S*B, 2] + [S*S*B, 2] 
-
-
-    print("pred_box_xy col 5 syle dif: ", pred_box_xy[0].view(BOX, GRID_W, GRID_H, 2)[:, 5, :, :2])
-    print("pred_box_xy col 5 syle dif: ", pred_box_xy[0].view(BOX, GRID_W, GRID_H, 2)[:, :, 6, :2])
     pred_box_wh = y_pred[..., 2:4].exp().view(-1, BOX, 2) * torch.Tensor(ANCHORS).view(1, BOX, 2)
     pred_box_wh = pred_box_wh.view(-1, GRID_H * GRID_W * BOX, 2)
     pred_box_xywh = torch.cat([pred_box_xy, pred_box_wh], -1)
@@ -234,7 +213,7 @@ def get_detection_result(y_pred, conf_thres=0.6, nms_thres=0.4, classes=len(LABE
     # rescale x, y
     y_pred[:,:4] = y_pred[:, :4] * 416 / 13
 
-    for iframe in range(batch_size):
+    for iframe in range(BATCH_SIZE):
         total_keep = 0
         i_frame_pred = y_pred[iframe]     # [S*S*B, 5+1]
 
@@ -261,10 +240,7 @@ def get_detection_result(y_pred, conf_thres=0.6, nms_thres=0.4, classes=len(LABE
 
             b = torch.cat([x_mins, y_mins, x_maxs, y_maxs], -1)
             scores = cls_i_pred[:,4]
-
             keep = nms(b, scores, iou_threshold = nms_thres)
-
-            print("keep: ", keep)
 
             keep_boxes = cls_i_pred[keep]
             n_keep = keep_boxes.shape[0]
@@ -276,92 +252,6 @@ def get_detection_result(y_pred, conf_thres=0.6, nms_thres=0.4, classes=len(LABE
                 output[iframe, total_keep:total_keep+n_keep, :] = keep_boxes
 
     return output
-
-def get_detection_result_b(feats, threshold, iou_thres, n_classes):
-    '''
-    get true detection from final feature map
-    - feat shape: [N, grid * grid * nAnchor, 5 + nClass]
-    - output: the final detection result tensor of shape [#detection, attributes: 
-    (image_id_in_batch, x1, y1, x2, y2, prob, class_id, class_prob)]
-    '''
-    batch_size = feats.shape[0]
-    result = feats.new_zeros([batch_size, 50, 6])
-
-
-
-    # Assign zero to boxes which have objective probability less than threshold
-    mask = (feats[:,:,4] >= threshold).float().unsqueeze(2)
-    feats = feats * mask
-
-    result_exits = False
-    batch_size = feats.size(0)
-
-    # output = torch.randn(1, 1)
-    for index in range(batch_size):
-        feat = feats[index]
-        # remove object with objectnesss = 0
-        mask = torch.nonzero(feat[:, 4]).squeeze()
-        try:
-            feat = feat[mask]
-        except:
-            print("has exception in first step!")
-            continue
-
-        # convert result format from (x, y, w, h, pro, class[0], class[1])
-        # to format (x1, y1, x2, y2, pro, max_classid, score)
-        x1 = (feat[:, 0] - feat[:, 2]/2).unsqueeze(1)
-        x2 = (feat[:, 0] + feat[:, 2]/2).unsqueeze(1)
-        y1 = (feat[:, 1] - feat[:, 3]/2).unsqueeze(1)
-        y2 = (feat[:, 1] + feat[:, 3]/2).unsqueeze(1)
-
-        max_class_prob, class_id = torch.max(feat[:, 5:5+n_classes], 1)
-        max_class_prob = max_class_prob.float().unsqueeze(1)
-        class_id = class_id.float().unsqueeze(1)
-
-        # cat all the features together
-        new_feat = torch.cat((x1, y1, x2, y2, feat[:, 4].unsqueeze(1), class_id, max_class_prob), 1)
-
-        # conducting nms
-        classes_in_prediction = torch.unique(new_feat[:, 5]) # get list of unique classes in the class_id column
-
-        for cls_id in classes_in_prediction:
-            # perform NMS for each class
-            # 1. get the detections corresponding to cls_id
-            mask = (new_feat[:, 5] == cls_id).float()
-            idx = torch.nonzero(mask).squeeze()
-            predictions_of_cls = new_feat[idx].view(-1, 7)
-
-            # 2. sort the predictions_of_cls in the descending order.
-            sorted_idx = torch.sort(predictions_of_cls[:, 4])[1]       # sort by object_prob column
-            predictions_of_cls = predictions_of_cls[sorted_idx]
-            n_predictions_of_cls = predictions_of_cls.size(0)
-
-            # 3. remove the boxes with the iou > threshold
-            for i in range(n_predictions_of_cls):
-                try:
-                    ious = box_ious(predictions_of_cls[i].unsqueeze(0), predictions_of_cls[i+1:])
-                except:
-                    break
-                
-                iou_mask = (ious < iou_thres).float().unsqueeze(1)      # ious > thres will be masked as zero
-                predictions_of_cls[i+1:] *= iou_mask
-
-                # remove the zero entries
-                non_zero_index = torch.nonzero(predictions_of_cls[:, 4]).squeeze()
-                predictions_of_cls = predictions_of_cls[non_zero_index].view(-1, 7)
-
-            # 4. assign batch index into the result 
-            batch_index = predictions_of_cls.new(predictions_of_cls.size(0), 1).fill_(index)
-
-            if not result_exits:
-                output = torch.cat((batch_index, predictions_of_cls), 1)
-                result_exits = True
-            else:
-                temp = torch.cat((batch_index, predictions_of_cls), 1)
-                output = torch.cat((output, temp), 0)
-
-    return output
-
 
 if __name__ == "__main__":
     pass
