@@ -125,6 +125,9 @@ class YOLOv2(nn.Module):
         # build y_true from ground truth
         y_true      = self.build_target(true_boxes) #  shape of [N, S*S*B, 5 + n_class]
 
+        if torch.cuda.is_available():
+            y_true = y_true.cuda()
+
         # prepare grid, and empty mask
         shift_x, shift_y = torch.meshgrid(torch.arange(0, self.GRID_W), torch.arange(0, self.GRID_H))
         c_x         = shift_x.t().contiguous().float()
@@ -147,7 +150,7 @@ class YOLOv2(nn.Module):
         y_pred = y_pred.permute(0, 2, 3, 1).contiguous().view(self.BATCH_SIZE, self.GRID_H * self.GRID_W * self.BOX, 5 + self.CLASS)
 
         # adjust xy, wh
-        pred_box_xy = y_pred[..., 0:2].sigmoid() + grid_xy         # [N, S*S*B, 2] + [S*S*B, 2] 
+        pred_box_xy = y_pred[..., 0:2].cuda().sigmoid() + grid_xy         # [N, S*S*B, 2] + [S*S*B, 2] 
         pred_box_wh = y_pred[..., 2:4].exp().view(-1, self.BOX, 2) * torch.Tensor(self.ANCHORS).view(1, self.BOX, 2)
         pred_box_wh = pred_box_wh.view(self.BATCH_SIZE, self.GRID_H * self.GRID_W * self.BOX, 2)
         pred_box_xywh = torch.cat([pred_box_xy, pred_box_wh], -1)
