@@ -33,7 +33,7 @@ class VOCDataset(Dataset):
         image_path = os.path.join(self.data_path, "JPEGImages", "{}.jpg".format(id))
         image = cv2.imread(image_path)
         image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-        
+
         image_xml_path = os.path.join(self.data_path, "Annotations", "{}.xml".format(id))
         anno = ET.parse(image_xml_path)
 
@@ -42,8 +42,8 @@ class VOCDataset(Dataset):
             xmin, xmax, ymin, ymax = [int(obj.find('bndbox').find(tag).text) - 1 for tag in ["xmin", "xmax", "ymin", "ymax"]]
             box_w = xmax - xmin
             box_h = ymax - ymin
-            center_x = xmin + box_w / 2
-            center_y = ymin + box_h / 2
+            center_x = xmin + box_w // 2
+            center_y = ymin + box_h // 2
             label = self.classes.index(obj.find('name').text.lower().strip())
             objects.append([center_x, center_y, box_w, box_h, label])
 
@@ -52,7 +52,11 @@ class VOCDataset(Dataset):
 
         array_objects = np.array(objects, dtype=np.float32)
         t = np.zeros([50, 5])
-        t[:array_objects.shape[0]] = array_objects
+        if (array_objects.shape[0] > 50):
+            print("Image has more than 50 objects: {}".format(image_path))
+            t[:50] = array_objects[:50]
+        else:
+            t[:array_objects.shape[0]] = array_objects
 
         return np.transpose(np.array(image, dtype=np.float32), (2, 0, 1)), t
 

@@ -26,16 +26,16 @@ GRID_W, GRID_H      = 13, 13
 OBJ_THRESHOLD       = 0.6
 NMS_THRESHOLD       = 0.4
 
-ANCHORS             = [123, 324, 123, 324 ,123, 324 , 123, 324 , 123, 324]
+ANCHORS             = [1.3221, 1.73145, 3.19275, 4.00944, 5.05587, 8.09892, 9.47112, 4.84053, 11.2364, 10.0071]
 BOX                 = int(len(ANCHORS) / 2)
 
 # hyper parameters for loss function
-LAMBDA_OBJECT       = 0.5
+LAMBDA_OBJECT       = 5.0
 LAMBDA_NO_OBJECT    = 1.0
 LAMBDA_COORD        = 1.0
 LAMBDA_CLASS        = 1.0
 
-BATCH_SIZE          = 4
+BATCH_SIZE          = 2
 TRUE_BOX_BUFFER     = 50
 
 class ReorgLayer(nn.Module):
@@ -126,25 +126,25 @@ class YOLOv2(nn.Module):
 
         coord_mask  = y_true.new_zeros([BATCH_SIZE, GRID_H * GRID_W * BOX])
         conf_mask   = y_true.new_zeros([BATCH_SIZE, GRID_H * GRID_W * BOX])
-        class_mask  = y_true.new_zeros([BATCH_SIZE, GRID_H * GRID_W * BOX])
+        class_mask  = y_true.new_zeros([BATCH_SIZE, GRID_H * GRID_W * BOX]).byte()
 
         '''
         Adjust prediction
         '''
-        # adjust output to the shape of [N, S*S*B, 5 + n_class]
+        # transform from shape of [N, B*(5+CLASS), S, S] to [N, S*S*B, 5 + CLASS]
         y_pred = y_pred.permute(0, 2, 3, 1).contiguous().view(BATCH_SIZE, GRID_H * GRID_W * BOX, 5 + CLASS)
 
         # adjust xy, wh
-        pred_box_xy = torch.sigmoid(y_pred[..., 0:2]) + grid_xy         # [N, S*S*B, 2] + [S*S*B, 2] 
-        pred_box_wh = torch.exp(y_pred[..., 2:4]).view(-1, BOX, 2) * torch.Tensor(ANCHORS).reshape([1, BOX, 2])
+        pred_box_xy = y_pred[..., 0:2].sigmoid() + grid_xy         # [N, S*S*B, 2] + [S*S*B, 2] 
+        pred_box_wh = y_pred[..., 2:4].exp().view(-1, BOX, 2) * torch.Tensor(ANCHORS).view(1, BOX, 2)
         pred_box_wh = pred_box_wh.view(-1, GRID_H * GRID_W * BOX, 2)
         pred_box_xywh = torch.cat([pred_box_xy, pred_box_wh], -1)
 
         # adjust confidence score
-        pred_box_conf = torch.sigmoid(y_pred[..., 4])
+        pred_box_conf = (y_pred[..., 4]).sigmoid()
 
         # adjust class propabilities
-        pred_box_class = F.log_softmax(y_pred[...,5:], dim=-1)
+        pred_box_class = y_pred[...,5:]
 
         '''
         Adjust ground truth
@@ -156,11 +156,12 @@ class YOLOv2(nn.Module):
         # adjust true confidence score
         iou_scores = bbox_ious(pred_box_xywh, y_true[:4])
 
-        true_box_conf = iou_scores * y_true[..., 4]
+        true_box_conf = iou_scores.detach() * y_true[..., 4]
+
+        print("true_box_conf: ", true_box_conf[true_box_conf>0])
         
         # adjust class probabilities
-        true_box_class = y_true[...,5]
-        
+        true_box_class = y_true[...,5].long()
         '''
         Determine the mask
         '''
@@ -170,36 +171,53 @@ class YOLOv2(nn.Module):
 
         ### confidence mask: penalize predictors and boxes with low IoU
         # first, penalize boxes, which has IoU with any ground truth box < 0.6
-        iou_scores = bbox_ious(pred_box_xywh.unsqueeze(2), true_boxes[..., :4].unsqueeze(1)) #[N, S*S*B, , 1]       
+        iou_scores = bbox_ious(pred_box_xywh.unsqueeze(2), true_boxes[..., :4].unsqueeze(1)) #[N, S*S*B, 50 , 1]       
 
-        best_ious, _ = torch.max(iou_scores, dim=2, keepdim=False)     #[N, S*S*B, 1]
+        best_ious, _ = torch.max(iou_scores, dim=2, keepdim=False)     #[N, S*S*B]
+
+        print("best iou shape: ", best_ious.shape)
         conf_mask = conf_mask + (best_ious < 0.6).float() * (1 - y_true[..., 4]) * LAMBDA_NO_OBJECT
 
         # second, penalized predictors
         conf_mask = conf_mask + y_true[..., 4] * LAMBDA_OBJECT
 
+        n_obj = (conf_mask == LAMBDA_OBJECT).float().sum()
+        n_no_obj = (conf_mask == LAMBDA_NO_OBJECT).float().sum()
+        n_positive = (conf_mask > 0).float().sum()
+
+        print("confidence mask: #OBJ {}, #NO_OBJ {}, #TOTAL: {}, #OBJ + #NO_OBJ == #TOTAL? {}".format( n_obj, n_no_obj, n_obj+n_no_obj, n_obj + n_no_obj == n_positive))
+
         ### class mask: simply the positions containing true boxes
-        class_mask = y_true[..., 4].bool()
+        class_mask = y_true[..., 4].bool().view(-1)
 
         '''
         Finalize the loss
         '''
+        # Compute losses
+        mse = nn.MSELoss(reduction='sum')
+        ce = nn.CrossEntropyLoss(reduction='sum')
+
+        # count number
         nb_coord_box = (coord_mask > 0.0).float().sum()
         nb_conf_box = (conf_mask > 0.0).float().sum()
         nb_class_box = (class_mask > 0.0).float().sum()
 
+        print(" =====> nb_coord_box: ", nb_coord_box)
+        print(" =====> nb_conf_box: ", nb_conf_box)
+        print(" =====> nb_class_box: ", nb_class_box)
+
         # loss_xywh
-        loss_xy = F.mse_loss(pred_box_xy * coord_mask, true_box_xy * coord_mask, reduction='sum') / (nb_conf_box + 1e-6)
-        loss_wh = F.mse_loss(pred_box_wh * coord_mask, true_box_wh * coord_mask, reduction='sum')/ (nb_coord_box + 1e-6)
+        loss_xy = mse(pred_box_xy * coord_mask, true_box_xy * coord_mask) / (nb_coord_box + 1e-6)
+
+        print("pred coord: ", pred_box_wh[coord_mask.squeeze() > 0])
+        print("true  coord: ", true_box_wh[coord_mask.squeeze() > 0])
+        loss_wh = mse(pred_box_wh * coord_mask, true_box_wh * coord_mask)/ (nb_coord_box + 1e-6)
 
         # loss_class
-        class_mask = class_mask.view(-1, 1)
-        t_pred_box_class = pred_box_class.view(-1, CLASS).masked_select(class_mask).view(-1, CLASS)
-        t_true_box_idx = true_box_class.view(-1, 1).masked_select(class_mask).long().view(-1)
-        loss_class = F.nll_loss(t_pred_box_class, t_true_box_idx, reduction='sum') / (nb_class_box + 1e-6) * LAMBDA_CLASS
+        loss_class = ce(pred_box_class.view(-1, CLASS)[class_mask],true_box_class.view(-1)[class_mask]) / (nb_class_box + 1e-6) * LAMBDA_CLASS
 
         # loss_confidence
-        loss_conf = F.mse_loss(pred_box_conf * conf_mask, true_box_conf * conf_mask, reduction='sum') / (nb_conf_box + 1e-6)
+        loss_conf = mse(pred_box_conf * conf_mask, true_box_conf * conf_mask) / (nb_conf_box + 1e-6)
 
         loss = loss_xy + loss_wh + loss_class + loss_conf
 
@@ -212,7 +230,7 @@ class YOLOv2(nn.Module):
         print("loss conf: ", loss_conf)
         print("total loss: ", loss)
 
-        return loss
+        return loss, loss_xy + loss_wh, loss_conf, loss_class
 
     def build_target(self, ground_truth):
         """

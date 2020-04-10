@@ -1,7 +1,48 @@
 import numpy as np
 import torch
 import cv2
+from torchvision.ops import nms
 
+# VOC 2012 dataset
+LABELS = ['aeroplane', 'bicycle', 'bird', 'boat', 'bottle', 'bus', 'car', 'cat', 'chair', 'cow',
+                        'diningtable', 'dog', 'horse', 'motorbike', 'person', 'pottedplant', 'sheep', 'sofa', 'train',
+                        'tvmonitor']
+
+CLASS = len(LABELS)
+
+IMAGE_W, IMAGE_H    = 416, 416
+GRID_W, GRID_H      = 13, 13
+
+
+ANCHORS             = [1.3221, 1.73145, 3.19275, 4.00944, 5.05587, 8.09892, 9.47112, 4.84053, 11.2364, 10.0071]
+BOX                 = int(len(ANCHORS) / 2)
+
+
+def draw_boxes(image, boxes, label=LABELS, color=255):
+    """
+    draw boxes on image
+    - image: np array or cv2 image
+    - boxes: shape [50, 5 + 1]
+    - label: array of label e.g. ["car", "dog", etc]
+    """
+
+    if boxes.shape[1] == 6:
+        boxes = torch.cat([boxes[:,:4], boxes[:,5].unsqueeze(-1)], -1)
+    for obj in boxes:
+        if obj[2] == 0 and obj[3] == 0:
+            break
+
+        x, y, w, h, cls_idx = obj
+        xmin, xmax = int(x - w/2), int(x + w/2)
+        ymin, ymax = int(y - h/2), int(y + h/2)
+
+        print("object: ", obj)
+
+        cv2.rectangle(image, (xmin, ymin), (xmax, ymax), color, 2)
+        cv2.putText(image, LABELS[int(cls_idx)], (xmin, ymin), cv2.FONT_HERSHEY_PLAIN, 2, color)
+
+
+    return image
 
 def resize_image(image, label, image_size):
     """
@@ -15,11 +56,9 @@ def resize_image(image, label, image_size):
     for lb in label:
         resized_xmin = lb[0] * width_ratio
         resized_ymin = lb[1] * height_ratio
-        resized_xmax = lb[2] * width_ratio
-        resized_ymax = lb[3] * height_ratio
-        resize_width = resized_xmax - resized_xmin
-        resize_height = resized_ymax - resized_ymin
-        new_label.append([resized_xmin, resized_ymin, resize_width, resize_height, lb[4]])
+        width = lb[2] * width_ratio
+        height = lb[3] * height_ratio
+        new_label.append([resized_xmin, resized_ymin, width, height, lb[4]])
 
     return image, new_label
     
@@ -43,10 +82,16 @@ def bbox_ious(boxes1, boxes2):
     box2_mins = box2_xy - box2_wh_half
     box2_maxs = box2_xy + box2_wh_half
 
+    box1_mins.clamp_(0)
+    box1_maxs.clamp_(0)
+    box2_mins.clamp_(0)
+    box2_maxs.clamp_(0)
+
     # calculate min xy of intersects, areas of intersect
     intersect_mins = torch.max(box1_mins, box2_mins)
     intersect_maxs = torch.min(box1_maxs, box2_maxs)
     intersect_wh = intersect_maxs - intersect_mins
+    intersect_wh.clamp_(0)
     intersect_areas = intersect_wh[..., 0] * intersect_wh[..., 1]
 
     # calculate areas of 2 boxes
@@ -135,13 +180,114 @@ class BestAnchorFinder(object):
                 max_iou     = iou
         return(best_anchor,max_iou)    
 
-def get_detection_result(feats, threshold, iou_thres, n_classes):
+
+def get_detection_result(y_pred, conf_thres=0.6, nms_thres=0.4, classes=len(LABELS)):
+    """
+    input:
+        - y_pred: [N, B*(5+CLASS), S, S]
+        - conf_thres: confidence threshold
+        - nms_thres: NMS threshold
+        - classes: number of class
+    return:
+        - out: [N, 50, 5+1]
+    """
+
+    print("*"*50)
+    print("Get detection result: ", y_pred.shape)
+    print("*"*50)
+    
+
+    batch_size = y_pred.shape[0]
+    output = y_pred.new_zeros([batch_size, 50, 5+1])
+
+    # prepare grid, and empty mask
+    shift_x, shift_y = torch.meshgrid(torch.arange(0, GRID_W), torch.arange(0, GRID_H))
+    c_x         = shift_x.t().contiguous().float()
+    c_y         = shift_y.t().contiguous().float()
+    grid_xy     = torch.cat([c_x.view(-1, 1), c_y.view(-1, 1)], -1)  # [S*S, 2]
+    grid_xy     = grid_xy.repeat(BOX, 1)                             # [S*S*B, 2]
+
+    '''
+    Adjust prediction
+    '''
+    # transform from shape of [N, B*(5+CLASS), S, S] to [N, S*S*B, 5 + CLASS]
+    y_pred = y_pred.permute(0, 2, 3, 1).contiguous().view(batch_size, GRID_H * GRID_W * BOX, 5 + CLASS)
+
+    # adjust xy, wh
+    pred_box_xy = y_pred[..., 0:2].sigmoid() + grid_xy         # [N, S*S*B, 2] + [S*S*B, 2] 
+
+
+    print("pred_box_xy col 5 syle dif: ", pred_box_xy[0].view(BOX, GRID_W, GRID_H, 2)[:, 5, :, :2])
+    print("pred_box_xy col 5 syle dif: ", pred_box_xy[0].view(BOX, GRID_W, GRID_H, 2)[:, :, 6, :2])
+    pred_box_wh = y_pred[..., 2:4].exp().view(-1, BOX, 2) * torch.Tensor(ANCHORS).view(1, BOX, 2)
+    pred_box_wh = pred_box_wh.view(-1, GRID_H * GRID_W * BOX, 2)
+    pred_box_xywh = torch.cat([pred_box_xy, pred_box_wh], -1)
+
+    y_pred[..., :4] = pred_box_xywh
+
+    # adjust confidence score
+    y_pred[..., 4].sigmoid_()
+
+    # adjust class prob
+    y_pred[..., 5:] = torch.nn.Softmax(dim=-1)(y_pred[..., 5:])
+
+    # rescale x, y
+    y_pred[:,:4] = y_pred[:, :4] * 416 / 13
+
+    for iframe in range(batch_size):
+        total_keep = 0
+        i_frame_pred = y_pred[iframe]     # [S*S*B, 5+1]
+
+        ### first, remove boxes with confidence score < conf_thres
+        i_frame_pred = i_frame_pred[i_frame_pred[:, 4] >= conf_thres]
+
+        clses_idx = i_frame_pred[:, 5:].argmax(-1)
+
+        i_frame_pred = torch.cat([i_frame_pred[:,:5], clses_idx.float().unsqueeze(-1)], -1)
+
+
+        ### second, run NMS on each class
+        for cls_idx in range(classes):
+            cls_i_pred = i_frame_pred[i_frame_pred[:, 5] == cls_idx].view(-1, 6)
+
+            if cls_i_pred.shape[0] == 0:
+                # if there is no detection of this class, we skip
+                continue
+            
+            x_mins = (cls_i_pred[:,0] - cls_i_pred[:,2]/2).unsqueeze(-1)
+            x_maxs = (cls_i_pred[:,0] + cls_i_pred[:,2]/2).unsqueeze(-1)
+            y_mins = (cls_i_pred[:,1] - cls_i_pred[:,3]/2).unsqueeze(-1)
+            y_maxs = (cls_i_pred[:,1] + cls_i_pred[:,3]/2).unsqueeze(-1)
+
+            b = torch.cat([x_mins, y_mins, x_maxs, y_maxs], -1)
+            scores = cls_i_pred[:,4]
+
+            keep = nms(b, scores, iou_threshold = nms_thres)
+
+            print("keep: ", keep)
+
+            keep_boxes = cls_i_pred[keep]
+            n_keep = keep_boxes.shape[0]
+
+            if n_keep:
+                # assert total_keep + n_keep < 50
+                if total_keep + n_keep >=50:
+                    break
+                output[iframe, total_keep:total_keep+n_keep, :] = keep_boxes
+
+    return output
+
+def get_detection_result_b(feats, threshold, iou_thres, n_classes):
     '''
     get true detection from final feature map
     - feat shape: [N, grid * grid * nAnchor, 5 + nClass]
     - output: the final detection result tensor of shape [#detection, attributes: 
     (image_id_in_batch, x1, y1, x2, y2, prob, class_id, class_prob)]
     '''
+    batch_size = feats.shape[0]
+    result = feats.new_zeros([batch_size, 50, 6])
+
+
 
     # Assign zero to boxes which have objective probability less than threshold
     mask = (feats[:,:,4] >= threshold).float().unsqueeze(2)
