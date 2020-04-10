@@ -150,8 +150,8 @@ class YOLOv2(nn.Module):
         y_pred = y_pred.permute(0, 2, 3, 1).contiguous().view(self.BATCH_SIZE, self.GRID_H * self.GRID_W * self.BOX, 5 + self.CLASS)
 
         # adjust xy, wh
-        pred_box_xy = y_pred[..., 0:2].cuda().sigmoid() + grid_xy         # [N, S*S*B, 2] + [S*S*B, 2] 
-        pred_box_wh = y_pred[..., 2:4].exp().view(-1, self.BOX, 2) * torch.Tensor(self.ANCHORS).view(1, self.BOX, 2)
+        pred_box_xy = y_pred[..., 0:2].sigmoid() + grid_xy         # [N, S*S*B, 2] + [S*S*B, 2] 
+        pred_box_wh = y_pred[..., 2:4].exp().view(-1, self.BOX, 2) * torch.Tensor(self.ANCHORS).cuda().view(1, self.BOX, 2)
         pred_box_wh = pred_box_wh.view(self.BATCH_SIZE, self.GRID_H * self.GRID_W * self.BOX, 2)
         pred_box_xywh = torch.cat([pred_box_xy, pred_box_wh], -1)
 
