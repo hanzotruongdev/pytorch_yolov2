@@ -29,8 +29,6 @@ LAMBDA_NO_OBJECT    = 1.0
 LAMBDA_COORD        = 1.0
 LAMBDA_CLASS        = 1.0
 
-BATCH_SIZE          = 2
-
 class ReorgLayer(nn.Module):
     def __init__(self, stride=2):
         super(ReorgLayer, self).__init__()
@@ -147,7 +145,7 @@ class YOLOv2(nn.Module):
         # adjust xy, wh
         pred_box_xy = y_pred[..., 0:2].sigmoid() + grid_xy         # [N, S*S*B, 2] + [S*S*B, 2] 
         pred_box_wh = y_pred[..., 2:4].exp().view(-1, self.BOX, 2) * torch.Tensor(self.ANCHORS).view(1, self.BOX, 2)
-        pred_box_wh = pred_box_wh.view(-1, self.GRID_H * self.GRID_W * self.BOX, 2)
+        pred_box_wh = pred_box_wh.view(self.BATCH_SIZE, self.GRID_H * self.GRID_W * self.BOX, 2)
         pred_box_xywh = torch.cat([pred_box_xy, pred_box_wh], -1)
 
         # adjust confidence score
@@ -164,7 +162,7 @@ class YOLOv2(nn.Module):
         true_box_wh = y_true[..., 2:4]
 
         # adjust true confidence score
-        iou_scores = bbox_ious(pred_box_xywh, y_true[:4])
+        iou_scores = bbox_ious(pred_box_xywh, y_true[..., :4])
 
         true_box_conf = iou_scores.detach() * y_true[..., 4]
         
