@@ -46,7 +46,10 @@ def train():
             print("")
             print("========== Epoch: {}, step: {} ==========".format(epoch, batch_idx))
 
-            images, labels = Variable(images, requires_grad = True), labels
+            if torch.cuda.is_available():
+                image = Variable(images.cuda(), requires_grad=True)
+            else:
+                image = Variable(images, requires_grad=True)
 
             optimizer.zero_grad()
             output = net.forward(images)

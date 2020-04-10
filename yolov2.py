@@ -132,6 +132,10 @@ class YOLOv2(nn.Module):
         grid_xy     = torch.cat([c_x.view(-1, 1), c_y.view(-1, 1)], -1)  # [S*S, 2]
         grid_xy     = grid_xy.repeat(self.BOX, 1)                             # [S*S*B, 2]
 
+        if torch.cuda.is_available():
+            grid_xy = grid_xy.cuda()
+            y_true = y_true.cuda()
+
         coord_mask  = y_true.new_zeros([self.BATCH_SIZE, self.GRID_H * self.GRID_W * self.BOX])
         conf_mask   = y_true.new_zeros([self.BATCH_SIZE, self.GRID_H * self.GRID_W * self.BOX])
         class_mask  = y_true.new_zeros([self.BATCH_SIZE, self.GRID_H * self.GRID_W * self.BOX]).byte()
