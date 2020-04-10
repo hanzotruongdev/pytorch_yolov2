@@ -19,6 +19,12 @@ from utils import draw_boxes, get_detection_result
 parser = arg_parse()
 args = parser.parse_args()
 
+# create some output folder if not exist
+if not os.path.isdir(args.output):
+    os.mkdir(args.output)
+if not os.path.isdir(args.model_dir):
+    os.mkdir(args.model_dir)
+
 # define and load YOLOv2
 net = YOLOv2(args)
 net.load_weight()
@@ -87,9 +93,15 @@ def train():
                 file_path = os.path.join(args.output, "result_epoch_{}_iter_{}.jpg".format(epoch, batch_idx))
                 cv2.imwrite(file_path, im)
 
+        ### save model
+        model_path = os.path.join(args.model_dir, "model_epoch_{}".format(epoch))
+        torch.save(net.state_dict(), model_path)
+        print("Saved model: ", model_path)
+
     writer.close()
 
 if __name__ == "__main__":
+
     train()
 
     

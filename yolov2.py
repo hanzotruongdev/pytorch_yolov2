@@ -125,21 +125,20 @@ class YOLOv2(nn.Module):
         # build y_true from ground truth
         y_true      = self.build_target(true_boxes) #  shape of [N, S*S*B, 5 + n_class]
 
-        if torch.cuda.is_available():
-            y_true = y_true.cuda()
-            y_pred = y_pred.cuda()
-            true_boxes = true_boxes.cuda()
-
         # prepare grid, and empty mask
         shift_x, shift_y = torch.meshgrid(torch.arange(0, self.GRID_W), torch.arange(0, self.GRID_H))
         c_x         = shift_x.t().contiguous().float()
         c_y         = shift_y.t().contiguous().float()
         grid_xy     = torch.cat([c_x.view(-1, 1), c_y.view(-1, 1)], -1)  # [S*S, 2]
         grid_xy     = grid_xy.repeat(self.BOX, 1)                             # [S*S*B, 2]
+        t_anchors   = torch.Tensor(self.ANCHORS)
 
         if torch.cuda.is_available():
+            y_pred = y_pred.cuda()
             grid_xy = grid_xy.cuda()
             y_true = y_true.cuda()
+            true_boxes = true_boxes.cuda()
+            t_anchors = t_anchors.cuda()
 
         coord_mask  = y_true.new_zeros([self.BATCH_SIZE, self.GRID_H * self.GRID_W * self.BOX])
         conf_mask   = y_true.new_zeros([self.BATCH_SIZE, self.GRID_H * self.GRID_W * self.BOX])
@@ -153,7 +152,7 @@ class YOLOv2(nn.Module):
 
         # adjust xy, wh
         pred_box_xy = y_pred[..., 0:2].sigmoid() + grid_xy         # [N, S*S*B, 2] + [S*S*B, 2] 
-        pred_box_wh = y_pred[..., 2:4].exp().view(-1, self.BOX, 2) * torch.Tensor(self.ANCHORS).cuda().view(1, self.BOX, 2)
+        pred_box_wh = y_pred[..., 2:4].exp().view(-1, self.BOX, 2) * t_anchors.view(1, self.BOX, 2)
         pred_box_wh = pred_box_wh.view(self.BATCH_SIZE, self.GRID_H * self.GRID_W * self.BOX, 2)
         pred_box_xywh = torch.cat([pred_box_xy, pred_box_wh], -1)
 

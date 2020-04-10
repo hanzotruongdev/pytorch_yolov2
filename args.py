@@ -6,6 +6,7 @@ def arg_parse():
     """
     parser = argparse.ArgumentParser(description="A simplified YOLOv2 detector with Darknet19 backbone!")
     parser.add_argument("--output", dest="output", help="Path to output folder of detection result", default="./output")
+    parser.add_argument("--model_dir", dest="model_dir", help="Path to the directory for storing trained models", default="./models")
 
     parser.add_argument("--weights", dest="weights", help="Path to the pretrained model",)
     parser.add_argument("--darknet19_weights", dest="darknet19_weights", help="Path to the pretrained darknet19-weights file", default="./darknet19_448.conv.23")
