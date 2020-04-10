@@ -16,7 +16,8 @@ from dataset import VOCDataset
 from yolov2 import YOLOv2
 from utils import draw_boxes, get_detection_result
 
-args = arg_parse()
+parser = arg_parse()
+args = parser.parse_args()
 
 # define and load YOLOv2
 net = YOLOv2(args)

@@ -16,4 +16,4 @@ def arg_parse():
     parser.add_argument("--momentum", dest="momentum", help="Learning momentum", default=0.9)
     parser.add_argument("--decay", dest="decay", help="Learning weights decay", default=5e-4)
     
-    return parser.parse_args()
+    return parser
