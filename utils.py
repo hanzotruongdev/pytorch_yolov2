@@ -231,6 +231,9 @@ def get_detection_result(y_pred, anchors, classes, conf_thres=0.6, nms_thres=0.4
 
         ### first, remove boxes with confidence score < conf_thres
         i_frame_pred = i_frame_pred[i_frame_pred[:, 4] >= conf_thres]
+        if i_frame_pred.shape[0] == 0:
+            # skip frame with no detection
+            continue
 
         clses_idx = i_frame_pred[:, 5:].argmax(-1)
 
