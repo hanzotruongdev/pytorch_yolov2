@@ -232,7 +232,7 @@ class YOLOv2(nn.Module):
         Build target output y_true with shape of [N, S*S*B, 5+1]
         """
 
-        y_true = np.zeros([self.BATCH_SIZE, self.GRID_W, self.GRID_H, self.BOX,  4 + 1 + 1], dtype=np.float)
+        y_true = np.zeros([self.BATCH_SIZE, self.BOX, self.GRID_W, self.GRID_H,  4 + 1 + 1], dtype=np.float)
 
         for iframe in range(self.BATCH_SIZE):
             for obj in ground_truth[iframe]:
@@ -249,9 +249,9 @@ class YOLOv2(nn.Module):
                 box = [center_x, center_y, w, h]
                 best_anchor, best_iou = self.best_anchor_finder.find(w, h)
 
-                y_true[iframe, grid_x, grid_y, best_anchor, :4] = box
-                y_true[iframe, grid_x, grid_y, best_anchor, 4] = 1.
-                y_true[iframe, grid_x, grid_y, best_anchor, 5] = int(class_index)
+                y_true[iframe, best_anchor, grid_x, grid_y, :4] = box
+                y_true[iframe, best_anchor, grid_x, grid_y, 4] = 1.
+                y_true[iframe, best_anchor, grid_x, grid_y, 5] = int(class_index)
 
         y_true = y_true.reshape([self.BATCH_SIZE, -1, 6])
 
@@ -265,7 +265,7 @@ if __name__ == "__main__":
     net = YOLOv2(args_)
     net.load_weight("./darknet19_448.conv.23")
 
-    training_set = VOCDataset("D:\\dataset\\VOC\\VOCdevkit", "2012", "train", image_size=net.IMAGE_W)
+    training_set = VOCDataset("D:/dataset/VOC/VOCdevkit/", "2012", "train", image_size=net.IMAGE_W)
     dataloader = DataLoader(training_set, batch_size=net.BATCH_SIZE)
 
     print("Training len: ", len(dataloader))
