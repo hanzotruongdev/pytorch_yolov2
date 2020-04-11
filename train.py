@@ -27,6 +27,8 @@ if not os.path.isdir(args.model_dir):
 
 # define and load YOLOv2
 net = YOLOv2(args)
+if torch.cuda.is_available():
+    net.cuda()
 net.load_weight()
 
 def train():
@@ -40,17 +42,20 @@ def train():
     training_set = VOCDataset("D:/dataset/VOC/VOCdevkit/", "2012", "train", image_size=net.IMAGE_W)
     dataloader = DataLoader(training_set, shuffle= True, batch_size=net.BATCH_SIZE)
     
-    N_ITERS_PER_EPOCH = len(dataloader) // net.BATCH_SIZE
+    N_ITERS_PER_EPOCH = len(dataloader)
 
     writer = SummaryWriter()
-    writer.add_graph(net, torch.rand(4, 3, 416, 416))
+
+    if torch.cuda.is_available():
+        writer.add_graph(net.cpu(), torch.rand(4, 3, 416, 416))
+    else:
+        writer.add_graph(net, torch.rand(4, 3, 416, 416))
 
     for epoch in range(args.epoch):
-        
-        for batch_idx, (images, labels) in enumerate(dataloader):
+        for step, (images, labels) in enumerate(dataloader):
 
             print("")
-            print("========== Epoch: {}, step: {} ==========".format(epoch, batch_idx))
+            print("========== Epoch: {}, step: {}/{} ==========".format(epoch, step, N_ITERS_PER_EPOCH))
 
             if torch.cuda.is_available():
                 image = Variable(images.cuda(), requires_grad=True)
@@ -67,18 +72,18 @@ def train():
             loss, loss_coord, loss_conf, loss_cls = [l.item() for l in [loss, loss_coord, loss_conf, loss_cls]]
 
             ### logs to tensorboard
-            writer.add_scalar('Train/Total_loss', loss, epoch * N_ITERS_PER_EPOCH + batch_idx)
-            writer.add_scalar('Train/Coordination_loss', loss_coord, epoch * N_ITERS_PER_EPOCH + batch_idx)
-            writer.add_scalar('Train/Confidence_loss', loss_conf, epoch * N_ITERS_PER_EPOCH + batch_idx)
-            writer.add_scalar('Train/Class_loss', loss_cls, epoch * N_ITERS_PER_EPOCH + batch_idx)
+            writer.add_scalar('Train/Total_loss', loss, epoch * N_ITERS_PER_EPOCH + step)
+            writer.add_scalar('Train/Coordination_loss', loss_coord, epoch * N_ITERS_PER_EPOCH + step)
+            writer.add_scalar('Train/Confidence_loss', loss_conf, epoch * N_ITERS_PER_EPOCH + step)
+            writer.add_scalar('Train/Class_loss', loss_cls, epoch * N_ITERS_PER_EPOCH + step)
 
             ### log to console
-            print('- Train/Total_loss: ', loss)
             print('- Train/Coordination_loss: ', loss_coord)
             print('- Train/Confidence_loss: ', loss_conf)
             print('- Train/Class_loss: ', loss_cls)
+            print('- Train/Total_loss: ', loss)
 
-            if batch_idx % 10 == 0:
+            if step % 10 == 0:
                 boxes = get_detection_result(output, net.ANCHORS, net.CLASS, conf_thres=.8, nms_thres=0.4)
 
                 # draw detected boxes and save sample
@@ -90,7 +95,7 @@ def train():
                 im = draw_boxes(im, labels[0], net.LABELS, color=color_green)
                 im = draw_boxes(im, boxes[0], net.LABELS, color = color_red)
 
-                file_path = os.path.join(args.output, "result_epoch_{}_iter_{}.jpg".format(epoch, batch_idx))
+                file_path = os.path.join(args.output, "result_epoch_{}_iter_{}.jpg".format(epoch, step))
                 cv2.imwrite(file_path, im)
 
         ### save model
