@@ -9,6 +9,7 @@ import torch.optim as optim
 from torch.autograd import Variable
 import cv2
 import os
+import time
 import numpy as np
 from torch.utils.tensorboard import SummaryWriter
 
@@ -57,6 +58,8 @@ def train():
             print("")
             print("========== Epoch: {}, step: {}/{} ==========".format(epoch, step, N_ITERS_PER_EPOCH))
 
+            time_start = time.time()
+
             if torch.cuda.is_available():
                 image = Variable(images.cuda(), requires_grad=True)
             else:
@@ -78,13 +81,14 @@ def train():
             writer.add_scalar('Train/Class_loss', loss_cls, epoch * N_ITERS_PER_EPOCH + step)
 
             ### log to console
+            print('- Train step time: {} seconds'.format(time.time() - time_start))
             print('- Train/Coordination_loss: ', loss_coord)
             print('- Train/Confidence_loss: ', loss_conf)
             print('- Train/Class_loss: ', loss_cls)
             print('- Train/Total_loss: ', loss)
 
             if step % 10 == 0:
-                boxes = get_detection_result(output, net.ANCHORS, net.CLASS, conf_thres=.8, nms_thres=0.4)
+                boxes = get_detection_result(output, net.ANCHORS, net.CLASS, conf_thres=net.OBJ_THRESHOLD, nms_thres=net.NMS_THRESHOLD)
 
                 # draw detected boxes and save sample
                 im = images[0].data.numpy().astype('uint8')

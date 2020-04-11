@@ -183,35 +183,47 @@ def get_detection_result(y_pred, anchors, classes, conf_thres=0.6, nms_thres=0.4
     
     output = y_pred.new_zeros([BATCH_SIZE, 50, 5+1])
 
-    # prepare grid, and empty mask
-    shift_x, shift_y = torch.meshgrid(torch.arange(0, GRID_W), torch.arange(0, GRID_H))
-    c_x         = shift_x.t().contiguous().float()
-    c_y         = shift_y.t().contiguous().float()
-    grid_xy     = torch.cat([c_x.view(-1, 1), c_y.view(-1, 1)], -1)  # [S*S, 2]
-    grid_xy     = grid_xy.repeat(BOX, 1)                             # [S*S*B, 2]
+    # prepare grid
+    lin_x = torch.arange(0, GRID_W).repeat(GRID_H, 1).view(GRID_W * GRID_H)
+    lin_y = torch.arange(0, GRID_H).repeat(1, GRID_W).view(GRID_W * GRID_H)
+    
+    t_anchors   = torch.Tensor(ANCHORS).view(-1, 2) #[BOX, 2]
+    anchor_w = t_anchors[:, 0]
+    anchor_h = t_anchors[:, 1]
 
     '''
     Adjust prediction
     '''
-    # transform from shape of [N, B*(5+CLASS), S, S] to [N, S*S*B, 5 + CLASS]
-    y_pred = y_pred.permute(0, 2, 3, 1).contiguous().view(BATCH_SIZE, GRID_H * GRID_W * BOX, 5 + CLASS)
+    ### y_pred has shape of [N, B*(5+CLASS), S, S], we need it transfromated 
+    ### to [N, W, H, B * (5 + CLASS)]
+    y_pred = y_pred.permute(0, 2, 3, 1).contiguous()
 
-    # adjust xy, wh
-    pred_box_xy = y_pred[..., 0:2].sigmoid() + grid_xy         # [N, S*S*B, 2] + [S*S*B, 2] 
-    pred_box_wh = y_pred[..., 2:4].exp().view(-1, BOX, 2) * torch.Tensor(ANCHORS).view(1, BOX, 2)
-    pred_box_wh = pred_box_wh.view(-1, GRID_H * GRID_W * BOX, 2)
-    pred_box_xywh = torch.cat([pred_box_xy, pred_box_wh], -1)
+    ### adjust x, y, w, h
+    y_pred          = y_pred.view(BATCH_SIZE, GRID_H * GRID_W, BOX, 5 + CLASS)     #[N, W*H, B, (5 + CLASS)]
+    pred_box_x      = y_pred[..., 0].sigmoid() + lin_x.view(-1, 1)       # [N, W*H, B] + [W*H, 1]      =>   #[N, W*H, B]
+    pred_box_y      = y_pred[..., 1].sigmoid() + lin_y.view(-1, 1)       # [N, W*H, B] + [W*H, 1]      =>   #[N, W*H, B]
+    pred_box_w      = y_pred[..., 2].exp() * anchor_w.view(-1)           # [N, W*H, B] * [B]           =>   #[N, W*H, B]
+    pred_box_h      = y_pred[..., 3].exp() * anchor_h.view(-1)           # [N, W*H, B] * [B]           =>   #[N, W*H, B]
 
-    y_pred[..., :4] = pred_box_xywh
-
+    y_pred          = y_pred.view(BATCH_SIZE, GRID_H * GRID_W * BOX, 5 + CLASS)
+    pred_box_xywh   = torch.cat([pred_box_x.view(BATCH_SIZE, -1, 1), pred_box_y.view(BATCH_SIZE, -1, 1), \
+        pred_box_w.view(BATCH_SIZE, -1, 1), pred_box_h.view(BATCH_SIZE, -1, 1)], -1)
+       
     # adjust confidence score
-    y_pred[..., 4].sigmoid_()
+    pred_box_conf = (y_pred[..., 4]).sigmoid()
 
-    # adjust class prob
-    y_pred[..., 5:] = torch.nn.Softmax(dim=-1)(y_pred[..., 5:])
+    # adjust class propabilities: 
+    # - at train time: we do not Softmax cuz we call nn.CrossEntropyLoss
+    #   this loss function takes care call to nn.Softmax
+    # - at test time, we adjust by calling Softmax.
+    pred_box_class = torch.nn.Softmax(dim=-1)(y_pred[..., 5:])
 
     # rescale x, y
-    y_pred[:,:4] = y_pred[:, :4] * 416 / 13
+    pred_box_xywh.mul_(416 / 13)
+
+    y_pred[..., :4] = pred_box_xywh
+    y_pred[..., 5] = pred_box_conf
+    y_pred[..., 5:] = pred_box_class
 
     for iframe in range(BATCH_SIZE):
         total_keep = 0

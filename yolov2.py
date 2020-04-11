@@ -125,20 +125,24 @@ class YOLOv2(nn.Module):
         # build y_true from ground truth
         y_true      = self.build_target(true_boxes) #  shape of [N, S*S*B, 5 + n_class]
 
-        # prepare grid, and empty mask
-        shift_x, shift_y = torch.meshgrid(torch.arange(0, self.GRID_W), torch.arange(0, self.GRID_H))
-        c_x         = shift_x.t().contiguous().float()
-        c_y         = shift_y.t().contiguous().float()
-        grid_xy     = torch.cat([c_x.view(-1, 1), c_y.view(-1, 1)], -1)  # [S*S, 2]
-        grid_xy     = grid_xy.repeat(self.BOX, 1)                             # [S*S*B, 2]
-        t_anchors   = torch.Tensor(self.ANCHORS)
+        # prepare grid
+        lin_x = torch.arange(0, self.GRID_W).repeat(self.GRID_H, 1).view(self.GRID_W * self.GRID_H)
+        lin_y = torch.arange(0, self.GRID_H).repeat(1, self.GRID_W).view(self.GRID_W * self.GRID_H)
+        
+        t_anchors   = torch.Tensor(self.ANCHORS).view(-1, 2) #[BOX, 2]
+        anchor_w = t_anchors[:, 0]
+        anchor_h = t_anchors[:, 1]
 
         if torch.cuda.is_available():
             y_pred = y_pred.cuda()
-            grid_xy = grid_xy.cuda()
             y_true = y_true.cuda()
             true_boxes = true_boxes.cuda()
-            t_anchors = t_anchors.cuda()
+
+            lin_x = lin_x.cuda()
+            lin_y = lin_y.cuda()
+            anchor_w = anchor_w.cuda()
+            anchor_h = anchor_h.cuda()
+            
 
         coord_mask  = y_true.new_zeros([self.BATCH_SIZE, self.GRID_H * self.GRID_W * self.BOX])
         conf_mask   = y_true.new_zeros([self.BATCH_SIZE, self.GRID_H * self.GRID_W * self.BOX])
@@ -147,47 +151,57 @@ class YOLOv2(nn.Module):
         '''
         Adjust prediction
         '''
-        # transform from shape of [N, B*(5+CLASS), S, S] to [N, S*S*B, 5 + CLASS]
-        y_pred = y_pred.permute(0, 2, 3, 1).contiguous().view(self.BATCH_SIZE, self.GRID_H * self.GRID_W * self.BOX, 5 + self.CLASS)
+        ### y_pred has shape of [N, B*(5+CLASS), S, S], we need it transfromated 
+        ### to [N, W, H, B * (5 + CLASS)]
+        y_pred = y_pred.permute(0, 2, 3, 1).contiguous()
 
-        # adjust xy, wh
-        pred_box_xy = y_pred[..., 0:2].sigmoid() + grid_xy         # [N, S*S*B, 2] + [S*S*B, 2] 
-        pred_box_wh = y_pred[..., 2:4].exp().view(-1, self.BOX, 2) * t_anchors.view(1, self.BOX, 2)
-        pred_box_wh = pred_box_wh.view(self.BATCH_SIZE, self.GRID_H * self.GRID_W * self.BOX, 2)
-        pred_box_xywh = torch.cat([pred_box_xy, pred_box_wh], -1)
+        ### adjust x, y, w, h
+        y_pred          = y_pred.view(self.BATCH_SIZE, self.GRID_H * self.GRID_W, self.BOX, 5 + self.CLASS)     #[N, W*H, B, (5 + CLASS)]
+        pred_box_x      = y_pred[..., 0].sigmoid() + lin_x.view(-1, 1)       # [N, W*H, B] + [W*H, 1]      =>   #[N, W*H, B]
+        pred_box_y      = y_pred[..., 1].sigmoid() + lin_y.view(-1, 1)       # [N, W*H, B] + [W*H, 1]      =>   #[N, W*H, B]
+        pred_box_w      = y_pred[..., 2].exp() * anchor_w.view(-1)           # [N, W*H, B] * [B]           =>   #[N, W*H, B]
+        pred_box_h      = y_pred[..., 3].exp() * anchor_h.view(-1)           # [N, W*H, B] * [B]           =>   #[N, W*H, B]
 
+        y_pred          = y_pred.view(self.BATCH_SIZE, self.GRID_H * self.GRID_W * self.BOX, 5 + self.CLASS)
+        pred_box_xywh   = torch.cat([pred_box_x.view(self.BATCH_SIZE, -1, 1), pred_box_y.view(self.BATCH_SIZE, -1, 1), \
+            pred_box_w.view(self.BATCH_SIZE, -1, 1), pred_box_h.view(self.BATCH_SIZE, -1, 1)], -1)
+       
         # adjust confidence score
         pred_box_conf = (y_pred[..., 4]).sigmoid()
 
-        # adjust class propabilities
+        # adjust class propabilities: 
+        # - at train time: we do not Softmax cuz we call nn.CrossEntropyLoss
+        #   this loss function takes care call to nn.Softmax
+        # - at test time, we adjust by calling Softmax.
         pred_box_class = y_pred[...,5:]
 
         '''
         Adjust ground truth
         '''
-        # adjust true xy and wh
+        #  get true xy and wh
         true_box_xy = y_true[..., 0:2]
         true_box_wh = y_true[..., 2:4]
 
-        # adjust true confidence score
-        iou_scores = bbox_ious(pred_box_xywh, y_true[..., :4])
+        #### adjust true confidence score
+        iou_scores = bbox_ious(pred_box_xywh, y_true[..., :4])      # [N, W*H*B]
 
-        true_box_conf = iou_scores.detach() * y_true[..., 4]
+        true_box_conf = iou_scores.detach() * y_true[..., 4]        # [N, W*H*B]
         
         # adjust class probabilities
-        true_box_class = y_true[...,5].long()
+        true_box_class = y_true[...,5].long()                       # [N, W*H*B]
         '''
         Determine the mask
         '''
         ### coordinate mask, simply is all predictors
-        coord_mask = y_true[..., 4] * self.LAMBDA_COORD          # [N, S*S*B, 1]
-        coord_mask = coord_mask.unsqueeze(-1)
+        coord_mask = y_true[..., 4] * self.LAMBDA_COORD             # [N, W*H*B]
+        coord_mask = coord_mask.unsqueeze(-1)                       # [N, W*H*B, 1]
 
         ### confidence mask: penalize predictors and boxes with low IoU
         # first, penalize boxes, which has IoU with any ground truth box < 0.6
-        iou_scores = bbox_ious(pred_box_xywh.unsqueeze(2), true_boxes[..., :4].unsqueeze(1)) #[N, S*S*B, 50 , 1]       
+        iou_scores = bbox_ious(pred_box_xywh.unsqueeze(2),          # [N, W*H*B, 1, 4]
+            true_boxes[..., :4].unsqueeze(1))                       # [N, 1, 50, 4]       
 
-        best_ious, _ = torch.max(iou_scores, dim=2, keepdim=False)     #[N, S*S*B]
+        best_ious, _ = torch.max(iou_scores, dim=2, keepdim=False)  #[N, W*H*B]
 
         conf_mask = conf_mask + (best_ious < 0.6).float() * (1 - y_true[..., 4]) * self.LAMBDA_NO_OBJECT
 
@@ -199,7 +213,7 @@ class YOLOv2(nn.Module):
         n_positive = (conf_mask > 0).float().sum()
 
         ### class mask: simply the positions containing true boxes
-        class_mask = y_true[..., 4].bool().view(-1)
+        class_mask = y_true[..., 4].bool().view(-1)                 # [N * W * H * B]
 
         '''
         Finalize the loss
@@ -214,9 +228,9 @@ class YOLOv2(nn.Module):
         nb_class_box = (class_mask > 0.0).float().sum()
 
         # loss_xywh
-        loss_xy = mse(pred_box_xy * coord_mask, true_box_xy * coord_mask) / (nb_coord_box + 1e-6)
+        loss_xy = mse(pred_box_xywh[..., 0:2] * coord_mask, true_box_xy * coord_mask) / (nb_coord_box + 1e-6)
 
-        loss_wh = mse(pred_box_wh * coord_mask, true_box_wh * coord_mask)/ (nb_coord_box + 1e-6)
+        loss_wh = mse(pred_box_xywh[..., 2:4] * coord_mask, true_box_wh * coord_mask) / (nb_coord_box + 1e-6)
 
         # loss_class
         loss_class = ce(pred_box_class.view(-1, self.CLASS)[class_mask],true_box_class.view(-1)[class_mask]) / (nb_class_box + 1e-6) * self.LAMBDA_CLASS
@@ -232,7 +246,7 @@ class YOLOv2(nn.Module):
         Build target output y_true with shape of [N, S*S*B, 5+1]
         """
 
-        y_true = np.zeros([self.BATCH_SIZE, self.BOX, self.GRID_W, self.GRID_H,  4 + 1 + 1], dtype=np.float)
+        y_true = np.zeros([self.BATCH_SIZE, self.GRID_W, self.GRID_H, self.BOX, 4 + 1 + 1], dtype=np.float)
 
         for iframe in range(self.BATCH_SIZE):
             for obj in ground_truth[iframe]:
@@ -249,9 +263,9 @@ class YOLOv2(nn.Module):
                 box = [center_x, center_y, w, h]
                 best_anchor, best_iou = self.best_anchor_finder.find(w, h)
 
-                y_true[iframe, best_anchor, grid_x, grid_y, :4] = box
-                y_true[iframe, best_anchor, grid_x, grid_y, 4] = 1.
-                y_true[iframe, best_anchor, grid_x, grid_y, 5] = int(class_index)
+                y_true[iframe, grid_x, grid_y, best_anchor, :4] = box
+                y_true[iframe, grid_x, grid_y, best_anchor, 4] = 1.
+                y_true[iframe, grid_x, grid_y, best_anchor, 5] = int(class_index)
 
         y_true = y_true.reshape([self.BATCH_SIZE, -1, 6])
 
