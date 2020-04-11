@@ -55,6 +55,9 @@ def train():
     for epoch in range(args.epoch):
         for step, (images, labels) in enumerate(dataloader):
 
+            if images.shape[0] != net.BATCH_SIZE:
+                continue
+
             print("")
             print("========== Epoch: {}, step: {}/{} ==========".format(epoch, step, N_ITERS_PER_EPOCH))
 
