@@ -30,7 +30,13 @@ if not os.path.isdir(args.model_dir):
 net = YOLOv2(args)
 if torch.cuda.is_available():
     net.cuda()
-net.load_weight()
+
+if not args.load_model:
+    net.load_weight()
+else:
+    model_path = os.path.join(args.model_dir, args.model_name)
+    net.load_state_dict(torch.load(model_path))
+    print("Load full model : ", model_path)
 
 def train():
 
@@ -106,7 +112,7 @@ def train():
                 cv2.imwrite(file_path, im)
 
         ### save model
-        model_path = os.path.join(args.model_dir, "model_epoch_{}".format(epoch))
+        model_path = os.path.join(args.model_dir, "yolov2_epoch_{}.weights".format(epoch))
         torch.save(net.state_dict(), model_path)
         print("Saved model: ", model_path)
 

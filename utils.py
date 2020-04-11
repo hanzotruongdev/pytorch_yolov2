@@ -265,6 +265,7 @@ def get_detection_result(y_pred, anchors, classes, conf_thres=0.6, nms_thres=0.4
                 if total_keep + n_keep >=50:
                     break
                 output[iframe, total_keep:total_keep+n_keep, :] = keep_boxes
+                total_keep += n_keep
 
     return output
 

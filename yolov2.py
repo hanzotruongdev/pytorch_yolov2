@@ -208,10 +208,6 @@ class YOLOv2(nn.Module):
         # second, penalized predictors
         conf_mask = conf_mask + y_true[..., 4] * self.LAMBDA_OBJECT
 
-        n_obj = (conf_mask == self.LAMBDA_OBJECT).float().sum()
-        n_no_obj = (conf_mask == self.LAMBDA_NO_OBJECT).float().sum()
-        n_positive = (conf_mask > 0).float().sum()
-
         ### class mask: simply the positions containing true boxes
         class_mask = y_true[..., 4].bool().view(-1)                 # [N * W * H * B]
 
