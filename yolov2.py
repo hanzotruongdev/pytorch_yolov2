@@ -126,8 +126,8 @@ class YOLOv2(nn.Module):
         y_true      = self.build_target(true_boxes) #  shape of [N, S*S*B, 5 + n_class]
 
         # prepare grid
-        lin_x = torch.arange(0, self.GRID_W).repeat(self.GRID_H, 1).view(self.GRID_W * self.GRID_H)
-        lin_y = torch.arange(0, self.GRID_H).repeat(1, self.GRID_W).view(self.GRID_W * self.GRID_H)
+        lin_x = torch.arange(0, self.GRID_W).repeat(self.GRID_H, 1).t().contiguous().view(self.GRID_W * self.GRID_H)
+        lin_y = torch.arange(0, self.GRID_H).repeat(self.GRID_W, 1).view(self.GRID_W * self.GRID_H)
         
         t_anchors   = torch.Tensor(self.ANCHORS).view(-1, 2) #[BOX, 2]
         anchor_w = t_anchors[:, 0]
@@ -226,6 +226,8 @@ class YOLOv2(nn.Module):
         nb_class_box = (class_mask > 0.0).float().sum()
 
         # loss_xywh
+        # print("pred_box_xyhw at x:6, y:5,: ", pred_box_xywh.view(self.BATCH_SIZE, self.GRID_W, self.GRID_H, self.BOX, 4)[0, 6, 5, :, :])
+        # print("pred_box_xyhw at x:4, y:10,: ", pred_box_xywh.view(self.BATCH_SIZE, self.GRID_W, self.GRID_H, self.BOX, 4)[0, 4, 10, :, :])
         loss_xy = mse(pred_box_xywh[..., 0:2] * coord_mask, true_box_xy * coord_mask) / (nb_coord_box + 1e-6)
 
         loss_wh = mse(pred_box_xywh[..., 2:4] * coord_mask, true_box_wh * coord_mask) / (nb_coord_box + 1e-6)
@@ -237,7 +239,7 @@ class YOLOv2(nn.Module):
         loss_conf = mse(pred_box_conf * conf_mask, true_box_conf * conf_mask) / (nb_conf_box + 1e-6)
         loss = loss_xy + loss_wh + loss_class + loss_conf
 
-        return loss, loss_xy + loss_wh, loss_conf, loss_class
+        return loss_xy, loss_wh, loss_conf, loss_class
 
     def build_target(self, ground_truth):
         """

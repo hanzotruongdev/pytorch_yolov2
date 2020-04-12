@@ -77,24 +77,33 @@ def train():
             optimizer.zero_grad()
             output = net.forward(images)
 
-            loss, loss_coord, loss_conf, loss_cls = net.loss(output, labels)
-            loss.backward()
+            loss_xy, loss_wh, loss_conf, loss_cls = net.loss(output, labels)
+            loss_coord = loss_xy + loss_wh
+            total_loss = loss_coord + loss_conf + loss_cls
+
+            total_loss.backward()
             optimizer.step()
 
-            loss, loss_coord, loss_conf, loss_cls = [l.item() for l in [loss, loss_coord, loss_conf, loss_cls]]
+            
+
+            total_loss, loss_xy, loss_wh, loss_conf, loss_cls = [l.item() for l in [total_loss, loss_xy, loss_wh, loss_conf, loss_cls]]
+
+            
 
             ### logs to tensorboard
-            writer.add_scalar('Train/Total_loss', loss, epoch * N_ITERS_PER_EPOCH + step)
-            writer.add_scalar('Train/Coordination_loss', loss_coord, epoch * N_ITERS_PER_EPOCH + step)
+            writer.add_scalar('Train/Total_loss', total_loss, epoch * N_ITERS_PER_EPOCH + step)
+            writer.add_scalar('Train/Coordination_xy_loss', loss_xy, epoch * N_ITERS_PER_EPOCH + step)
+            writer.add_scalar('Train/Coordination_wh_loss', loss_wh, epoch * N_ITERS_PER_EPOCH + step)
             writer.add_scalar('Train/Confidence_loss', loss_conf, epoch * N_ITERS_PER_EPOCH + step)
             writer.add_scalar('Train/Class_loss', loss_cls, epoch * N_ITERS_PER_EPOCH + step)
 
             ### log to console
             print('- Train step time: {} seconds'.format(time.time() - time_start))
-            print('- Train/Coordination_loss: ', loss_coord)
+            print('- Train/Coordination_xy_loss: ', loss_xy)
+            print('- Train/Coordination_wh_loss: ', loss_wh)
             print('- Train/Confidence_loss: ', loss_conf)
             print('- Train/Class_loss: ', loss_cls)
-            print('- Train/Total_loss: ', loss)
+            print('- Train/Total_loss: ', total_loss)
 
             if step % 10 == 0:
                 boxes = get_detection_result(output, net.ANCHORS, net.CLASS, conf_thres=0.5, nms_thres=0.4)

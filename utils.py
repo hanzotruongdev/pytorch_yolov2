@@ -191,8 +191,8 @@ def get_detection_result(y_pred, anchors, classes, conf_thres=0.6, nms_thres=0.4
     output = y_pred.new_zeros([BATCH_SIZE, 50, 5+1])
 
     # prepare grid
-    lin_x = torch.arange(0, GRID_W).repeat(GRID_H, 1).view(GRID_W * GRID_H)
-    lin_y = torch.arange(0, GRID_H).repeat(1, GRID_W).view(GRID_W * GRID_H)
+    lin_x = torch.arange(0, GRID_W).repeat(GRID_H, 1).t().contiguous().view(GRID_W * GRID_H)
+    lin_y = torch.arange(0, GRID_H).repeat(GRID_W, 1).view(GRID_W * GRID_H)
     
     t_anchors   = torch.Tensor(ANCHORS).view(-1, 2) #[BOX, 2]
     anchor_w = t_anchors[:, 0]
