@@ -97,7 +97,7 @@ def train():
             print('- Train/Total_loss: ', loss)
 
             if step % 10 == 0:
-                boxes = get_detection_result(output, net.ANCHORS, net.CLASS, conf_thres=net.OBJ_THRESHOLD, nms_thres=net.NMS_THRESHOLD)
+                boxes = get_detection_result(output, net.ANCHORS, net.CLASS, conf_thres=0.5, nms_thres=0.4)
 
                 # draw detected boxes and save sample
                 im = images[0].data.numpy().astype('uint8')

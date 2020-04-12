@@ -11,18 +11,25 @@ def draw_boxes(image, boxes, label, color=255):
     - label: array of label e.g. ["car", "dog", etc]
     """
 
-    if boxes.shape[1] == 6:
-        boxes = torch.cat([boxes[:,:4], boxes[:,5].unsqueeze(-1)], -1)
+    has_conf_scores = boxes.shape[1] == 6
+
+    if has_conf_scores:
+        boxes = torch.cat([boxes[:,:4], boxes[:,5].unsqueeze(-1), boxes[:,4].unsqueeze(-1)], -1)
     for obj in boxes:
         if obj[2] == 0 and obj[3] == 0:
             break
 
-        x, y, w, h, cls_idx = obj
+        if has_conf_scores:
+            x, y, w, h, cls_idx, conf = obj
+        else:
+            x, y, w, h, cls_idx = obj
         xmin, xmax = int(x - w/2), int(x + w/2)
         ymin, ymax = int(y - h/2), int(y + h/2)
 
+        box_label =  "{:.1f} {}".format( conf if has_conf_scores else 1.0, label[int(cls_idx)])
+
         cv2.rectangle(image, (xmin, ymin), (xmax, ymax), color, 2)
-        cv2.putText(image, label[int(cls_idx)], (xmin, ymin), cv2.FONT_HERSHEY_PLAIN, 2, color)
+        cv2.putText(image, box_label, (xmin, ymin), cv2.FONT_HERSHEY_PLAIN, 2, color)
 
 
     return image
@@ -222,7 +229,7 @@ def get_detection_result(y_pred, anchors, classes, conf_thres=0.6, nms_thres=0.4
     pred_box_xywh.mul_(416 / 13)
 
     y_pred[..., :4] = pred_box_xywh
-    y_pred[..., 5] = pred_box_conf
+    y_pred[..., 4] = pred_box_conf
     y_pred[..., 5:] = pred_box_class
 
     for iframe in range(BATCH_SIZE):
@@ -263,6 +270,7 @@ def get_detection_result(y_pred, anchors, classes, conf_thres=0.6, nms_thres=0.4
             if n_keep:
                 # assert total_keep + n_keep < 50
                 if total_keep + n_keep >=50:
+                    print('>50 objects in detection results, we cut it out')
                     break
                 output[iframe, total_keep:total_keep+n_keep, :] = keep_boxes
                 total_keep += n_keep

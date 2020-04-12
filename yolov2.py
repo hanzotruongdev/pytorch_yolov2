@@ -117,10 +117,10 @@ class YOLOv2(nn.Module):
         # true boxes has boxes with size nomalized by input size
         # we need to scale to grid size
         true_boxes = true_boxes.float()
-        true_boxes[...,0] = true_boxes[...,0] * self.GRID_W / self.IMAGE_W    # x
-        true_boxes[...,1] = true_boxes[...,1] * self.GRID_H / self.IMAGE_H    # y
-        true_boxes[...,2] = true_boxes[...,2] * self.GRID_W / self.IMAGE_W    # w
-        true_boxes[...,3] = true_boxes[...,3] * self.GRID_H / self.IMAGE_H    # h
+        true_boxes[...,0].mul_(self.GRID_W / self.IMAGE_W)    # x
+        true_boxes[...,1].mul_(self.GRID_H / self.IMAGE_H)    # y
+        true_boxes[...,2].mul_(self.GRID_W / self.IMAGE_W)    # w
+        true_boxes[...,3].mul_(self.GRID_H / self.IMAGE_H)    # h
 
         # build y_true from ground truth
         y_true      = self.build_target(true_boxes) #  shape of [N, S*S*B, 5 + n_class]
@@ -200,6 +200,8 @@ class YOLOv2(nn.Module):
         # first, penalize boxes, which has IoU with any ground truth box < 0.6
         iou_scores = bbox_ious(pred_box_xywh.unsqueeze(2),          # [N, W*H*B, 1, 4]
             true_boxes[..., :4].unsqueeze(1))                       # [N, 1, 50, 4]       
+                                                                    # => [N, W*H*B, 50]
+        assert iou_scores.shape[1] == self.GRID_H * self.GRID_W * self.BOX and iou_scores.shape[2] == 50    
 
         best_ious, _ = torch.max(iou_scores, dim=2, keepdim=False)  #[N, W*H*B]
 
@@ -229,7 +231,7 @@ class YOLOv2(nn.Module):
         loss_wh = mse(pred_box_xywh[..., 2:4] * coord_mask, true_box_wh * coord_mask) / (nb_coord_box + 1e-6)
 
         # loss_class
-        loss_class = ce(pred_box_class.view(-1, self.CLASS)[class_mask],true_box_class.view(-1)[class_mask]) / (nb_class_box + 1e-6) * self.LAMBDA_CLASS
+        loss_class = ce(pred_box_class.view(-1, self.CLASS)[class_mask], true_box_class.view(-1)[class_mask]) / (nb_class_box + 1e-6) * self.LAMBDA_CLASS
 
         # loss_confidence
         loss_conf = mse(pred_box_conf * conf_mask, true_box_conf * conf_mask) / (nb_conf_box + 1e-6)
